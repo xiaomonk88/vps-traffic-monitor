@@ -1,6 +1,6 @@
 # 本地验证记录
 
-日期：2026-11-03。环境：Windows、Python 3.14、Node.js 24.22.1。Docker 不可用。
+日期：2026-11-03。环境：Windows、Python 3.14、Node.js 24.22.1。Windows 本机 Docker 不可用；已通过 GitHub Linux 运行器完成 amd64 镜像与容器验证。
 
 ## 已通过
 
@@ -33,12 +33,14 @@
 
 ## GitHub 发布新增验证
 
-新增主控一键安装器的参数校验测试，覆盖缺失参数、无效域名、换行注入和非法版本；Windows 本地合计 31 项测试通过。安装器及 Agent 脚本通过 bash 语法检查。GitHub Actions 配置 Python 3.11/3.13 Linux 测试、Docker 镜像构建、非 root 数据卷写入、重启持久化与下载包检查；远程执行结果待发布后记录。
+新增主控一键安装器的参数校验测试，覆盖缺失参数、无效域名、换行注入和非法版本；Windows 本地合计 31 项测试通过。安装器及 Agent 脚本通过 bash 语法检查。GitHub Actions 配置 Python 3.11/3.13 Linux 测试、Docker 镜像构建、非 root 数据卷写入、重启持久化与下载包检查；远程执行全部通过：GitHub Actions 运行 41502822643（代码提交 3be7459）。验证了 Debian 13 安装器只读预检、Compose 配置、Caddy 配置、完整 Docker 构建、非 root 容器启动、Agent 下载包散列及重启后数据卷密钥保持一致。首轮容器测试因重启后临时端口改变而失败，修正测试脚本后通过。
+
+验证记录：https://github.com/xiaomonk88/vps-traffic-monitor/actions/runs/41502822643
 
 ## 仍需验证
 
 1. 最终版浏览器功能与视觉复验。
-2. Debian 13 Docker 镜像构建、Compose、TLS 与数据卷持久化。
+2. 用户 Debian 13 VPS 上的完整一键安装、真实域名 TLS 与公网连通；amd64 容器和数据卷持久化已由 CI 验证，arm64 尚未验证。
 3. Linux Python/systemd 安装、升级、真实机器重启。
 4. 外部真实 SOCKS5 服务、受限 VPS 网络路径。
 5. 用户自己的 Telegram Bot 测试和定时实际投递。

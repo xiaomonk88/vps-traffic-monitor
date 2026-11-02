@@ -1,6 +1,6 @@
 # Debian 13 部署与维护
 
-Windows 本机未安装 Docker。GitHub Actions 已配置 Linux 测试、镜像构建和容器冒烟检查；具体结果以仓库 Actions 和 TESTING.md 为准。没有执行用户 VPS 的远程部署。
+Windows 本机未安装 Docker。GitHub Actions 已通过 Linux Python 3.11/3.13 测试、amd64 镜像构建、Caddy 配置及容器重启持久化检查；记录见仓库 Actions 和 TESTING.md。没有执行用户 VPS 的远程部署。
 
 ## 推荐：一键安装
 
@@ -48,7 +48,7 @@ docker compose exec app cat /data/setup-token.txt
 
 初始化成功后此文件自动删除。在“系统设置”将公开地址设为实际的 `https://主控域名`，再生成远程 Agent 安装命令。主控用单个进程运行，内含调度器；不要额外添加多 worker 或多副本。
 
-Docker 构建包含 Vue 前端和 Linux Agent 发布包。Python 运行依赖在 `requirements-lock.txt` 固定，前端使用 `package-lock.json`；基础镜像目前固定版本系列（Python 3.13、Node 24、Caddy 2），未锁定不可变 digest。跨平台依赖与镜像仍需在目标机完成构建验证。
+Docker 构建包含 Vue 前端和 Linux Agent 发布包。Python 运行依赖在 `requirements-lock.txt` 固定，前端使用 `package-lock.json`；基础镜像目前固定版本系列（Python 3.13、Node 24、Caddy 2），未锁定不可变 digest。amd64 镜像已在 GitHub Linux 运行器完成构建与启动验证；arm64 和目标 VPS 的网络、证书环境仍需实测。
 
 ## 2. Linux Agent
 

@@ -30,7 +30,7 @@ while pending:
         if child.marker is None or any(child.marker.evaluate(env) for env in environments):
             pending.append(child)
 (root / "requirements-lock.txt").write_text(
-    "# Runtime versions validated on Windows; Linux image build is pending.\n" +
+    "# Runtime dependency lock; validation results are recorded in TESTING.md.\n" +
     "\n".join(f"{name}=={version}" for name, version in sorted(versions.items())) + "\n",
     encoding="utf-8")
 print(f"Locked {len(versions)} runtime dependencies")
