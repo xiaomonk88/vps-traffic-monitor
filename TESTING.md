@@ -61,3 +61,11 @@
 ```
 
 在 `frontend` 目录执行 `npm.cmd run build`。完整浏览器复验应在获得重新运行授权后，先启动隔离的 8081 测试主控，再运行 `scripts/browser_smoke.py`；该测试不发送 Telegram。
+
+## v0.1.1 Agent 权限回归
+
+用户实际 Linux 节点在 v0.1.0 注册后因程序父目录为 700 而启动失败，日志确认 `Permission denied`。调整两级程序目录为 755 并重启服务后，用户确认主控已显示在线。配置和采集数据没有删除或重新注册。
+
+修复版在注册前以服务账号验证程序可运行，新建和升级都明确设置程序父目录权限。GitHub Actions 41505132383（代码提交 33783ec）全部通过。新增隔离 Linux 容器验证直接执行实际安装器，使用真实服务账号完成注册后的采集与上报，检查配置仍为私有权限，并重建旧版 700 父目录后验证升级自动修复。该容器测试替换了 systemctl，不能等同完整 systemd 生命周期验收；用户真实节点恢复在线补充了现场证据。
+
+CI：https://github.com/xiaomonk88/vps-traffic-monitor/actions/runs/41505132383
