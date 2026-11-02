@@ -49,6 +49,9 @@ try:
     assert hashlib.sha256(get("/downloads/sentinel-agent.zip")).hexdigest() == expected
     original_key = docker("exec", name, "sha256sum", "/data/master.key")
     docker("restart", name)
+    # Docker may assign a different ephemeral host port after a restart.
+    port = docker("port", name, "8080/tcp").rsplit(":", 1)[1]
+    base = "http://127.0.0.1:" + port
     ready()
     assert original_key == docker("exec", name, "sha256sum", "/data/master.key")
     print("Container health, static assets, Agent package, non-root volume and restart passed")

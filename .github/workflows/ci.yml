@@ -31,6 +31,8 @@ jobs:
         env:
           SENTINEL_DOMAIN: traffic.example.com
           ACME_EMAIL: admin@example.com
+      - name: Check installer on Debian 13 without modifying the host
+        run: docker run --rm -v "$PWD/install.sh:/install.sh:ro" debian:13 bash /install.sh --domain traffic.example.com --email admin@example.com --check
       - name: Build frontend, server and Agent image
         run: docker build -t traffic-sentinel:ci .
       - name: Validate HTTPS gateway configuration
