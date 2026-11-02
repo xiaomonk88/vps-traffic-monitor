@@ -4,7 +4,7 @@ set -euo pipefail
 umask 077
 
 REPOSITORY=xiaomonk88/vps-traffic-monitor
-RELEASE_VERSION=v0.1.0
+RELEASE_VERSION=v0.1.1
 BASE=/opt/traffic-sentinel-server
 DOMAIN=""; EMAIL=""; UPGRADE=0; CHECK=0
 
@@ -13,7 +13,7 @@ usage() {
   cat <<'TEXT'
 流量哨主控一键安装（Debian 12 / 13）
 sudo bash install.sh [--domain traffic.example.com --email admin@example.com]
-sudo bash install.sh --upgrade [--version v0.1.0]
+sudo bash install.sh --upgrade [--version v0.1.1]
 
 首次运行交互填写域名和证书邮箱；域名应已解析到这台 VPS，80/443 可用。
 安装目录：/opt/traffic-sentinel-server；数据使用 Docker 命名卷保存。
@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_input() {
-  [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.0'
+  [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.1'
   if [[ -n "$DOMAIN" ]]; then
     [[ ${#DOMAIN} -le 253 && "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || die '域名格式无效；请只填写域名，不含 https://、端口和路径'
     local label

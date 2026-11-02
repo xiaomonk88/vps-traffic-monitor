@@ -21,6 +21,7 @@ PYTHON=$(command -v python3)
 python3 -c 'import sys; assert sys.version_info >= (3,11), "需要 Python 3.11+"'
 command -v curl >/dev/null || { echo '请先安装 curl 和 ca-certificates'; exit 1; }
 command -v systemctl >/dev/null || { echo '第一版安装器需要 systemd'; exit 1; }
+command -v runuser >/dev/null || { echo '需要 runuser（Debian/Ubuntu 的 util-linux 软件包）'; exit 1; }
 if [[ -f "$STATE/config.json" && "$UPGRADE" -ne 1 ]]; then
   echo '已经安装；升级请加 --upgrade。修改代理请使用本地 configure 命令。'; exit 1
 fi
@@ -88,12 +89,19 @@ PY
 
 RELEASE="$BASE/releases/$(date +%Y%m%d%H%M%S)-$$"
 id sentinel-agent >/dev/null 2>&1 || useradd --system --home-dir "$STATE" --shell /usr/sbin/nologin sentinel-agent
-mkdir -p "$BASE/releases" "$STATE"
+# Program ancestors must be traversable by the unprivileged service account.
+# Set existing paths too, so upgrading repairs installations made with umask 077.
+install -d -m 0755 "$BASE" "$BASE/releases"
+mkdir -p "$STATE"
 chown sentinel-agent:sentinel-agent "$STATE"
 chmod 700 "$STATE"
 mkdir -p "$RELEASE"
 cp -a "$TASK_DIR/package/." "$RELEASE/"
 chmod -R u=rwX,go=rX "$RELEASE"
+if ! runuser -u sentinel-agent -- "$PYTHON" "$RELEASE/run-agent.py" --help >/dev/null; then
+  echo '服务账号无法运行 Agent，请检查程序父目录或 Python 路径权限。未执行新注册，原有配置已保留。' >&2
+  exit 1
+fi
 PREVIOUS=$(readlink "$BASE/current" 2>/dev/null || true)
 if [[ ! -f "$STATE/config.json" ]]; then
   [[ -n "$TOKEN" ]] || read -r -s -p '一次性注册凭据：' TOKEN
@@ -132,15 +140,21 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 UNIT
+chmod 0644 /etc/systemd/system/sentinel-agent.service
 systemctl daemon-reload
-systemctl enable --now sentinel-agent
+START_FAILED=0
+systemctl enable --now sentinel-agent || START_FAILED=1
 sleep 2
-if ! systemctl is-active --quiet sentinel-agent; then
+if [[ "$START_FAILED" == 1 ]] || ! systemctl is-active --quiet sentinel-agent; then
   if [[ -n "$PREVIOUS" && -d "$PREVIOUS" ]]; then
     ln -s "$PREVIOUS" "$BASE/rollback.new"
     mv -Tf "$BASE/rollback.new" "$BASE/current"
-    systemctl restart sentinel-agent
+    systemctl restart sentinel-agent || true
+    echo '新版本启动失败，已尝试恢复旧程序。' >&2
+  else
+    echo '服务启动失败；没有旧版本可回退，注册配置与数据已保留。' >&2
   fi
-  echo '启动失败，已尝试回退。请查看 journalctl -u sentinel-agent'; exit 1
+  journalctl -u sentinel-agent -n 20 --no-pager >&2 || true
+  exit 1
 fi
 printf '安装完成。查看状态：systemctl status sentinel-agent\n查看日志：journalctl -u sentinel-agent -n 50\n修改代理：sudo -u sentinel-agent python3 /opt/traffic-sentinel/current/run-agent.py configure --proxy --data /var/lib/traffic-sentinel\n修改后：systemctl restart sentinel-agent\n'

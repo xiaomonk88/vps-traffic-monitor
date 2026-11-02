@@ -39,3 +39,5 @@ jobs:
         run: docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -e SENTINEL_DOMAIN=traffic.example.com -e ACME_EMAIL=admin@example.com caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
       - name: Smoke test the container and its persistent data
         run: python3 scripts/smoke_container.py traffic-sentinel:ci
+      - name: Install and upgrade Agent as its real service account
+        run: docker run --rm --user 0 --entrypoint python -v "$PWD/scripts/check_agent_install.py:/check_agent_install.py:ro" traffic-sentinel:ci /check_agent_install.py

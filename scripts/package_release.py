@@ -1,6 +1,7 @@
 """Create a source/deployment bundle using an explicit allowlist; never include state."""
 import hashlib
 import zipfile
+import tomllib
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
@@ -13,7 +14,8 @@ patterns = ["sentinel/*.py", "tests/*.py", "scripts/*.py", "scripts/*.sh", "scri
 paths = {root / name for name in files}
 for pattern in patterns:
     paths.update(p for p in root.glob(pattern) if p.is_file())
-output = root / "dist" / "traffic-sentinel-0.1.0-source.zip"
+version = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+output = root / "dist" / f"traffic-sentinel-{version}-source.zip"
 output.parent.mkdir(exist_ok=True)
 with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
     for path in sorted(paths):

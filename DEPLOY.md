@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main
 - Caddy HTTPS：`https://caddyserver.com/docs/automatic-https`
 - HTTPX SOCKS：`https://www.python-httpx.org/advanced/proxies/`
 
-将 `dist/traffic-sentinel-0.1.0-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
+将 `dist/traffic-sentinel-0.1.1-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
 
 ```bash
 cp .env.example .env
@@ -138,3 +138,17 @@ docker compose up -d app
 - 导出备份，在独立数据卷验证恢复，避免直接覆盖唯一正式数据。
 
 尚未提供目标机连接信息，以上实机验收均未执行。
+
+## v0.1.0 Agent 启动失败修复
+
+若注册成功，但日志出现 `run-agent.py: [Errno 13] Permission denied`，是早期安装器把程序父目录创建为 root 私有目录。以 root 修复：
+
+```bash
+chmod 755 /opt/traffic-sentinel /opt/traffic-sentinel/releases
+systemctl restart sentinel-agent
+systemctl status sentinel-agent --no-pager -l
+```
+
+保留 `/var/lib/traffic-sentinel` 的 700 权限，不需要重新注册或删除配置。约一分钟后检查 Web 心跳。v0.1.1 安装器明确设置程序目录 755，并在注册前以服务账号校验程序能否运行；升级也修复已有父目录权限。
+
+主控升级到 v0.1.1 后，Web 生成的安装命令会使用修正版脚本。已通过上面命令修复的节点无需重装。
