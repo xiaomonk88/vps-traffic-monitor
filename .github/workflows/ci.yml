@@ -1,0 +1,39 @@
+name: Test and build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements-lock.txt pytest
+      - run: python -m pytest
+      - run: python -m pip check
+      - run: python scripts/build_agent.py && python scripts/check_agent_bundle.py
+      - run: bash -n install.sh && bash -n scripts/install-agent.sh && bash -n scripts/uninstall-agent.sh
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+        env:
+          SENTINEL_DOMAIN: traffic.example.com
+          ACME_EMAIL: admin@example.com
+      - name: Build frontend, server and Agent image
+        run: docker build -t traffic-sentinel:ci .
+      - name: Validate HTTPS gateway configuration
+        run: docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -e SENTINEL_DOMAIN=traffic.example.com -e ACME_EMAIL=admin@example.com caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+      - name: Smoke test the container and its persistent data
+        run: python3 scripts/smoke_container.py traffic-sentinel:ci

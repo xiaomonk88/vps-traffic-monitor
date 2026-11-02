@@ -1,0 +1,51 @@
+name: traffic-sentinel
+services:
+  app:
+    build: .
+    image: traffic-sentinel:0.1.0
+    restart: unless-stopped
+    environment:
+      SENTINEL_SECURE_COOKIE: "1"
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - sentinel_data:/data
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SENTINEL_DOMAIN: ${SENTINEL_DOMAIN:?请在.env中填写主控域名}
+      ACME_EMAIL: ${ACME_EMAIL:?请在.env中填写证书联系邮箱}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  sentinel_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import json
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from .accounting import node_view
+from .core import human_bytes, uid
+from .network import client
+
+
+class Scheduler:
+    def __init__(self, store, transport=None):
+        self.store = store
+        self.transport = transport
+
+    def daily_text(self, now):
+        cfg = self.store.settings()
+        local = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"]))
+        lines = ["📊 流量哨 · VPS 流量日报", f"统计日：{(local.date()-timedelta(days=1)).isoformat()}（{cfg['timezone']}）", "余额为本地估算，以各节点最近上报为准。", ""]
+        with self.store.connect() as db:
+            nodes = [node_view(db, r, now, cfg["timezone"], cfg["offline_minutes"]*60) for r in db.execute("SELECT * FROM nodes WHERE disabled=0").fetchall()]
+        nodes.sort(key=lambda n: (n["status"] == "online", -(n["percent"] or 0)))
+        if not nodes:
+            lines.append("暂无已添加的服务器。")
+        for n in nodes:
+            unit = n["profile"]["unit"] if n["profile"] else "GB"
+            icon = "🟢" if n["status"] == "online" else "🟠"
+            lines += [f"{icon} {n['name']}", f"昨日上传：{human_bytes(n['yesterday']['tx'],unit)} / 下载：{human_bytes(n['yesterday']['rx'],unit)}"]
+            if n["yesterday"]["coverage"] < .95:
+                lines.append(f"昨日采集覆盖：{n['yesterday']['coverage']:.0%}，存在未采集或估算时段")
+            if n["remaining"] is None:
+                lines.append("预计剩余：尚未校准")
+            else:
+                lines.append(f"预计剩余：{human_bytes(n['remaining'],unit)}（已用 {n['percent']:.1f}%）")
+            if n["cycle_end"]:
+                lines.append("下次重置："+datetime.fromtimestamp(n["cycle_end"], ZoneInfo(n["profile"]["timezone"])).strftime("%Y-%m-%d %H:%M")+f" {n['profile']['timezone']}")
+            if not n["fresh"]:
+                lines.append("⚠️ 数据过期或尚未追平，余额可能偏高")
+            if n["forecast_days"] is not None:
+                lines.append(f"按近期消耗预计可用：{n['forecast_days']:.1f} 天")
+            if n["exhaustion_risk"]:
+                lines.append("⚠️ 预计无法撑到重置日")
+            if n["last_data"]:
+                lines.append("最近采集："+datetime.fromtimestamp(n["last_data"], ZoneInfo(cfg["timezone"])).strftime("%m-%d %H:%M"))
+            lines.append("")
+        return "\n".join(lines)
+
+    def queue_daily(self, now=None, manual=False):
+        now = now or time.time()
+        cfg = self.store.settings()
+        date = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"])).date().isoformat()
+        key = "manual-daily:"+uid() if manual else "daily:"+date
+        text = self.daily_text(now)
+        with self.store.connect() as db:
+            self.store.enqueue(db, key, text, now)
+
+    def tick(self, now=None):
+        now = now or time.time()
+        cfg = self.store.settings()
+        self.maintenance(now, cfg)
+        if not cfg["telegram_enabled"]:
+            return
+        local = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"]))
+        if cfg["daily_enabled"] and local.strftime("%H:%M") >= cfg["daily_time"]:
+            self.queue_daily(now)
+        with self.store.connect() as db:
+            for row in db.execute("SELECT * FROM nodes WHERE disabled=0 AND enrolled IS NOT NULL").fetchall():
+                n = node_view(db, row, now, cfg["timezone"], cfg["offline_minutes"]*60)
+                state = db.execute("SELECT * FROM node_alert_state WHERE node_id=?", (n["id"],)).fetchone()
+                offline = not n["online"] and now-(n["heartbeat"] or n["enrolled"]) >= cfg["offline_minutes"]*60
+                if offline and (not state or not state["offline"]):
+                    self.store.enqueue(db, f"offline:{n['id']}:{int(n['heartbeat'] or n['enrolled'])}", f"🔴 {n['name']} 已超过 {cfg['offline_minutes']} 分钟未上报。\n本地余额可能偏高，请检查 Agent 或代理连接。", now)
+                if not offline and n["online"] and state and state["offline"]:
+                    self.store.enqueue(db, f"recovered:{n['id']}:{int(n['heartbeat'])}", f"🟢 {n['name']} 已恢复连接。断线期间数据将继续补报。", now)
+                end = n["cycle_end"]
+                if end and state and state["cycle_end"] and state["cycle_end"] != end and cfg["reset_notice"]:
+                    self.store.enqueue(db, f"reset:{n['id']}:{end}", f"🔄 {n['name']} 已按设置进入新计费周期。\n这是本地规则推算，尚未核对商家后台。", now)
+                if end and 0 < end-now <= 86400 and cfg["pre_reset_notice"]:
+                    self.store.enqueue(db, f"before-reset:{n['id']}:{end}", f"📅 {n['name']} 距配置的流量重置时间不足 24 小时。", now)
+                db.execute("INSERT INTO node_alert_state VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET offline=excluded.offline,cycle_end=excluded.cycle_end", (n["id"], int(offline), end))
+                if n["fresh"] and n["percent"] is not None:
+                    exceeded = [t for t in cfg["thresholds"] if n["percent"] >= t]
+                    if exceeded:
+                        highest = max(exceeded)
+                        key = f"quota:{n['id']}:{end}:{highest}"
+                        # Mark lower tiers as suppressed when jumping over several thresholds.
+                        for lower in exceeded[:-1]:
+                            db.execute("INSERT OR IGNORE INTO notifications(id,dedupe,created,due,text,state) VALUES(?,?,?,?,?,'suppressed')", (uid(), f"quota:{n['id']}:{end}:{lower}:0", now, now, "已合并到更高等级告警"))
+                        self.store.enqueue(db, key, f"⚠️ {n['name']} 流量已用约 {n['percent']:.1f}%\n预计剩余：{human_bytes(n['remaining'],n['profile']['unit'])}\n请及时检查，余额为本地估算。", now)
+                if cfg["forecast_enabled"] and n["exhaustion_risk"]:
+                    self.store.enqueue(db, f"forecast:{n['id']}:{local.date()}", f"⚠️ {n['name']} 按近期消耗预计还能使用 {n['forecast_days']:.1f} 天，可能在重置前用完。", now)
+                if n["meta"].get("error"):
+                    self.store.enqueue(db, f"agent-error:{n['id']}:{local.date()}", f"⚠️ {n['name']} 采集异常：{n['meta']['error']}", now)
+            db.execute("UPDATE notifications SET state='expired',error='超过24小时未发送' WHERE state IN ('pending','retry') AND created<?", (now-86400,))
+        self.deliver(now)
+
+    def deliver(self, now=None):
+        now = now or time.time()
+        cfg = self.store.settings()
+        if not cfg["telegram_enabled"]:
+            return
+        token = self.store.secret("telegram_token")
+        if not token or not cfg["chat_id"]:
+            return
+        with self.store.connect() as db:
+            db.execute("UPDATE notifications SET state='retry' WHERE state='sending' AND due<?", (now,))
+            db.execute("BEGIN IMMEDIATE") if not db.in_transaction else None
+            row = db.execute("SELECT * FROM notifications WHERE state IN ('pending','retry') AND due<=? ORDER BY created LIMIT 1", (now,)).fetchone()
+            if not row:
+                return
+            db.execute("UPDATE notifications SET state='sending',due=?,attempts=attempts+1 WHERE id=?", (now+300, row["id"]))
+        error, retry = "", min(3600, 30*2**min(row["attempts"], 7))
+        try:
+            with client(self.store.secret("telegram_proxy"), transport=self.transport) as http:
+                response = http.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": cfg["chat_id"], "text": row["text"]})
+                body = response.json()
+                if not response.is_success or not body.get("ok"):
+                    # Only the status is stored; remote text or exception URLs may echo secrets.
+                    error = f"Telegram 返回错误 {response.status_code}，请检查 Token、Chat ID 和网络"
+                    if response.status_code == 429:
+                        retry = max(1, min(86400, int(body.get("parameters", {}).get("retry_after", 60))))
+        except Exception as exc:
+            error = f"发送失败：{type(exc).__name__}，将自动重试"
+        with self.store.connect() as db:
+            db.execute("UPDATE notifications SET state=?,error=?,due=?,delivered=? WHERE id=?", ("retry" if error else "sent", error, now+retry if error else now, None if error else now, row["id"]))
+
+    def maintenance(self, now, cfg):
+        local = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"]))
+        directory = self.store.directory / "backups"
+        target = directory / f"sentinel-{local.date()}.db"
+        if not target.exists():
+            self.store.backup(target)
+            for old in sorted(directory.glob("sentinel-*.db"))[:-7]:
+                old.unlink()
+        with self.store.connect() as db:
+            db.execute("DELETE FROM sessions WHERE expires<?", (now,))
+            db.execute("DELETE FROM enrollments WHERE expires<?", (now,))
+            db.execute("DELETE FROM notifications WHERE created<? AND state IN ('sent','expired','suppressed')", (now-90*86400,))
+            row = db.execute("SELECT value FROM settings WHERE key='last_compact'").fetchone()
+            if not row or now-float(row[0]) >= 3600:
+                from .retention import compact
+                compact(db, now)
+                db.execute("INSERT OR REPLACE INTO settings VALUES('last_compact',?)", (str(now),))
