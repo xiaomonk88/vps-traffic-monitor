@@ -27,7 +27,7 @@ bash install-sentinel-server.sh --domain traffic.example.com --email admin@examp
 # 查看主控状态
 cd /opt/traffic-sentinel-server/current && docker compose ps
 # 升级主控（复用域名、邮箱和数据卷）
-bash install-sentinel-server.sh --upgrade --version v0.1.1
+bash install-sentinel-server.sh --upgrade --version v0.1.2
 ```
 
 安装器会检查容器状态并尝试访问公网 HTTPS；证书尚未就绪时明确提示检查解析和防火墙。它不会修改云商家防火墙。更多迁移、备份和手动部署步骤见 [DEPLOY.md](DEPLOY.md)。

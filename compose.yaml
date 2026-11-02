@@ -2,7 +2,7 @@ name: traffic-sentinel
 services:
   app:
     build: .
-    image: traffic-sentinel:0.1.1
+    image: traffic-sentinel:0.1.2
     restart: unless-stopped
     environment:
       SENTINEL_SECURE_COOKIE: "1"

@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main
 - Caddy HTTPS：`https://caddyserver.com/docs/automatic-https`
 - HTTPX SOCKS：`https://www.python-httpx.org/advanced/proxies/`
 
-将 `dist/traffic-sentinel-0.1.1-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
+将 `dist/traffic-sentinel-0.1.2-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
 
 ```bash
 cp .env.example .env

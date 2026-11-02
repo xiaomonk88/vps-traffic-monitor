@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "traffic-sentinel"
-version = "0.1.1"
+version = "0.1.2"
 description = "Self-hosted VPS traffic accounting and Telegram reporting"
 requires-python = ">=3.11"
 dependencies = [
