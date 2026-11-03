@@ -4,7 +4,7 @@ set -euo pipefail
 umask 077
 
 REPOSITORY=xiaomonk88/vps-traffic-monitor
-RELEASE_VERSION=v0.1.2
+RELEASE_VERSION=v0.1.3
 BASE=/opt/traffic-sentinel-server
 DOMAIN=""; EMAIL=""; UPGRADE=0; CHECK=0
 
@@ -13,7 +13,7 @@ usage() {
   cat <<'TEXT'
 流量哨主控一键安装（Debian 12 / 13）
 sudo bash install.sh [--domain traffic.example.com --email admin@example.com]
-sudo bash install.sh --upgrade [--version v0.1.2]
+sudo bash install.sh --upgrade [--version v0.1.3]
 
 首次运行交互填写域名和证书邮箱；域名应已解析到这台 VPS，80/443 可用。
 安装目录：/opt/traffic-sentinel-server；数据使用 Docker 命名卷保存。

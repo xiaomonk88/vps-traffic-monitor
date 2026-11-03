@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main
 - Caddy HTTPS：`https://caddyserver.com/docs/automatic-https`
 - HTTPX SOCKS：`https://www.python-httpx.org/advanced/proxies/`
 
-将 `dist/traffic-sentinel-0.1.2-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
+将 `dist/traffic-sentinel-0.1.3-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
 
 ```bash
 cp .env.example .env
@@ -61,7 +61,7 @@ apt-get install -y python3 curl ca-certificates
 
 在面板添加节点，选择 Linux 和连接方式，复制生成的命令，以 root 或 sudo 运行。安装器检查环境、下载并校验包、创建专用账号与 systemd 服务。Linux 发布包内置纯 Python HTTP/SOCKS 依赖，不需要在被监控 VPS 上运行 pip；系统仍需 Python、标准库、系统 CA 和时区数据。
 
-代理安装时，按网页说明准备权限为 600 的 `proxy-curl.conf`，使用 `socks5h` 让代理解析目标域名。下载脚本和安装期间都要经过代理。安装器会再次交互输入完整代理 URL，用于后续注册和运行。引导文件中的凭据不要提交到代码仓库。
+代理安装时，在“系统设置 → Agent 连接代理”保存默认 SOCKS5（或添加服务器时单独填写），连接方式选择“SOCKS5 代理”。生成的命令已包含代理：下载脚本、下载 Agent 包、注册和后续运行都经过该代理，代理通过管道传入（`--proxy-stdin`），不出现在进程参数中。`socks5://` 会自动按 `socks5h` 处理，让代理解析目标域名。含凭据的命令不要提交到代码仓库或公开分享。
 
 ```bash
 systemctl status sentinel-agent

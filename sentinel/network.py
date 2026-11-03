@@ -24,6 +24,14 @@ def validate_proxy(proxy: str):
     return proxy
 
 
+def validate_agent_proxy(proxy: str):
+    """A proxy that is embedded in a generated shell command and a curl config line."""
+    proxy = validate_proxy(proxy.strip())
+    if any(ch.isspace() or ch in '"\\' for ch in proxy):
+        raise ValueError("代理地址不能包含空白、双引号或反斜杠；用户名或密码中的特殊字符请使用百分号编码")
+    return proxy
+
+
 def client(proxy="", timeout=30, transport=None):
     # HTTPX SOCKS transport forwards the hostname to the proxy, no local target DNS.
     # Disabling environment overrides prevents accidental NO_PROXY/direct fallback.

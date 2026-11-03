@@ -27,7 +27,7 @@ bash install-sentinel-server.sh --domain traffic.example.com --email admin@examp
 # 查看主控状态
 cd /opt/traffic-sentinel-server/current && docker compose ps
 # 升级主控（复用域名、邮箱和数据卷）
-bash install-sentinel-server.sh --upgrade --version v0.1.2
+bash install-sentinel-server.sh --upgrade --version v0.1.3
 ```
 
 安装器会检查容器状态并尝试访问公网 HTTPS；证书尚未就绪时明确提示检查解析和防火墙。它不会修改云商家防火墙。更多迁移、备份和手动部署步骤见 [DEPLOY.md](DEPLOY.md)。
@@ -82,9 +82,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1 -Ski
 
 ## Telegram
 
-在“通知设置”填写 Bot Token、Chat ID、日报时区和发送时间。先向自己的 Bot 发起会话，群组需已加入 Bot 并允许发言。
+在“通知设置”添加一个或多个**通知渠道**（每个渠道包含名称、Bot Token 和 Chat ID），再设置日报时区和发送时间。先向自己的 Bot 发起会话，群组需已加入 Bot 并允许发言。
 
-- 可以预览日报、发测试消息、手动发送日报。
+- 每个渠道可单独启用/停用，并分别选择接收“日报”和“告警”；多个渠道可共用同一个 Bot。
+- 每个渠道独立排队与重试，一个渠道失败不影响其他渠道。
+- 可以预览日报、对单个渠道或全部渠道发测试消息、手动发送日报。
+- 从旧版本升级时，原来的 Bot Token 与 Chat ID 会自动迁移为名为“默认”的渠道。
 - 日报列出昨日上传/下载/计费量、当前预计余额、重置日期和采集覆盖情况。
 - 默认在已使用 80%、90%、95% 时提醒，支持调整阈值。
 - 支持离线/恢复、重置前 24 小时、进入新周期、预计提前耗尽提醒。
@@ -97,6 +100,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1 -Ski
 
 各 Agent 独立选择直连或 SOCKS5。代理故障会留存本地记录并重试，**不会自动回退直连**。支持代理端解析目标域名，以及用户名/密码认证。
 
+Linux：在“系统设置 → Agent 连接代理”保存默认 SOCKS5（也可在添加服务器时单独填写）。添加服务器时选择“SOCKS5 代理”，生成的一键命令已包含代理，直接在 VPS 上执行即可，无需额外准备文件。代理经管道传给 curl 和安装器，不会出现在进程参数中；命令本身含代理凭据，请勿公开分享。
+
 Windows：在安装窗口选择 SOCKS5，注册命令会交互询问代理 URL。现有节点可以本地修改：
 
 ```powershell
@@ -106,7 +111,7 @@ Windows：在安装窗口选择 SOCKS5，注册命令会交互询问代理 URL�
 # 修改后停止原采集进程，再执行网页中的 run 命令
 ```
 
-代理格式：`socks5h://用户名:密码@代理主机:1080`；密码中的 `@`、`/`、`#` 等应百分号编码。凭据交互输入，不要发到聊天中。代理配置只用于 Agent 的管理连接，不代理整台 VPS 的业务流量。
+代理格式：`socks5h://用户名:密码@代理主机:1080`；密码中的 `@`、`/`、`#` 等应百分号编码。不要把含凭据的命令发到聊天中。“通知设置”中的主控出站代理只用于主控访问 Telegram，与 Agent 代理互不影响。代理配置只用于 Agent 的管理连接，不代理整台 VPS 的业务流量。
 
 远程 VPS 不能连接 Windows 主控的 `127.0.0.1`。第一阶段先用本机 Agent 验证；远程部署时设置实际可达的 HTTPS 主控地址。禁止入站 80/443 不影响 Agent 主动上报；若出站受限，代理地址和端口仍须可达。
 

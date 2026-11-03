@@ -117,9 +117,10 @@ def test_never_calibrated_node_does_not_invent_balance_after_reset(client, node)
 
 def test_secrets_not_returned_and_backup_is_consistent(client, app):
     token = "123456:fake-token-for-tests"
-    assert client.put("/api/settings", json={"bot_token": token, "chat_id": "123", "telegram_enabled": True}).status_code == 200
+    assert client.post("/api/telegram/channels", json={"name": "主账号", "bot_token": token, "chat_id": "123"}).status_code == 200
+    assert client.put("/api/settings", json={"telegram_enabled": True}).status_code == 200
     data = client.get("/api/settings").json()
-    assert data["token_configured"] and token not in json.dumps(data)
+    assert data["channels"][0]["token_configured"] and token not in json.dumps(data)
     assert token.encode() not in app.state.store.path.read_bytes()
     backup = client.get("/api/backup")
     assert backup.status_code == 200 and backup.content.startswith(b"PK")

@@ -8,8 +8,15 @@ from sentinel.core import canonical
 from conftest import report, sample
 
 
+def add_channel(client, name="主账号", chat="99", **flags):
+    response = client.post("/api/telegram/channels", json={"name": name, "bot_token": "123456:fake-for-test", "chat_id": chat, **flags})
+    assert response.status_code == 200, response.text
+    return response.json()["id"]
+
+
 def enabled(client):
-    assert client.put("/api/settings", json={"bot_token": "123456:fake-for-test", "chat_id": "99", "telegram_enabled": True}).status_code == 200
+    add_channel(client)
+    assert client.put("/api/settings", json={"telegram_enabled": True}).status_code == 200
 
 
 def test_telegram_429_respects_retry_and_hides_token(client, app):
@@ -73,6 +80,7 @@ def test_quota_alert_merges_lower_tiers(client, app, node):
 
 
 def test_long_messages_split_safely(client, app):
+    add_channel(client)
     with app.state.store.connect() as db:
         app.state.store.enqueue(db, "long", ("节点 🟢 详细报告\n"*1000))
         chunks = db.execute("SELECT text FROM notifications").fetchall()

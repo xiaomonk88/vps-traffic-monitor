@@ -7,7 +7,7 @@ import NodeDetail from './components/NodeDetail.vue'
 import SettingsView from './components/SettingsView.vue'
 import EventsView from './components/EventsView.vue'
 import { api, APIError, ago, bytes, trafficBytes, directions, errorText, metered, setCSRF, shortDate, statusLabels, type Node } from './api'
-const ready=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai'})
+const ready=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai',channels:0})
 let timer:ReturnType<typeof setInterval> | undefined
 const pages=[{id:'overview',name:'流量总览',icon:LayoutDashboard,desc:'集中查看各服务器的剩余额度、计费用量、重置周期与运行状态。'},{id:'notifications',name:'通知设置',icon:Bell,desc:'配置 Telegram 连接、每日报告与即时告警规则。'},{id:'events',name:'事件记录',icon:ScrollText,desc:'追溯系统事件与通知发送结果。'},{id:'system',name:'系统设置',icon:Settings,desc:'管理主控访问地址、数据备份与管理员账户。'}]
 const current=computed(()=>pages.find(v=>v.id===page.value) || pages[0])
@@ -19,7 +19,7 @@ const yesterdayParts=computed(()=>trafficBytes(yesterday.value).split(' '))
 const refreshedAt=computed(()=>lastRefresh.value?new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(lastRefresh.value*1000)):'—')
 async function init(){fatal.value='';ready.value=false;try{const status=await api('/status');initialized.value=status.initialized;version.value=status.version;if(status.initialized){try{const me=await api('/me');setCSRF(me.csrf);username.value=me.username;await refresh();await loadTelegram()}catch(e){if(!(e instanceof APIError && e.status===401))throw e}}}catch(e){fatal.value=errorText(e)}finally{ready.value=true}}
 async function refresh(){if(busy.value||!username.value)return;busy.value=true;try{const data=await api<{nodes:Node[];timezone:string}>('/nodes');nodes.value=data.nodes;zone.value=data.timezone;lastRefresh.value=Date.now()/1000;error.value=''}catch(e){error.value=errorText(e)}finally{busy.value=false}}
-async function loadTelegram(){try{const data=await api('/settings');telegram.value={enabled:data.telegram_enabled,time:data.daily_time,zone:data.timezone}}catch{/* Settings page surfaces its own error. */}}
+async function loadTelegram(){try{const data=await api('/settings');telegram.value={enabled:data.telegram_enabled,time:data.daily_time,zone:data.timezone,channels:data.channels.filter((c:{enabled:boolean})=>c.enabled).length}}catch{/* Settings page surfaces its own error. */}}
 async function authenticated(name:string){username.value=name;initialized.value=true;await refresh();await loadTelegram()}
 async function logout(){try{await api('/logout','POST');expired()}catch(e){error.value=errorText(e)}}
 function expired(){username.value='';setCSRF('');nodes.value=[];detailId.value='';adding.value=false;installNode.value=undefined}
@@ -107,7 +107,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
             <button class="kpi kpi-link" @click="page='notifications'">
               <div class="kpi-head"><span>Telegram 日报与告警</span><i class="kpi-icon"><Send :size="16" /></i></div>
               <div class="kpi-value kpi-state"><span class="tag" :class="{ positive: telegram.enabled }">{{ telegram.enabled ? '已启用' : '未启用' }}</span></div>
-              <p>{{ telegram.enabled ? `每天 ${telegram.time} · ${telegram.zone}` : '尚未启用，配置后接收流量与重置提醒。' }}</p>
+              <p>{{ telegram.enabled ? `${telegram.channels} 个渠道 · 每天 ${telegram.time} · ${telegram.zone}` : '尚未启用，配置后接收流量与重置提醒。' }}</p>
               <span class="kpi-action">{{ telegram.enabled ? '查看配置' : '配置通知' }}<ChevronRight :size="15" /></span>
             </button>
           </section>

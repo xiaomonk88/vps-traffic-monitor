@@ -45,6 +45,7 @@ onMounted(load)
         <summary>
           <span class="tag" :class="notice.state==='sent' ? 'positive' : notice.error ? 'negative' : ''">{{ stateNames[notice.state] || notice.state }}</span>
           <strong>{{ notice.text.split('\n')[0] }}</strong>
+          <span v-if="notice.channel_name" class="channel-tag">{{ notice.channel_name }}</span>
           <time>{{ dateTime(notice.created) }}</time>
         </summary>
         <pre class="report-preview">{{ notice.text }}</pre>

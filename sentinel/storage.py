@@ -34,13 +34,13 @@ CREATE TABLE IF NOT EXISTS calibrations (id TEXT PRIMARY KEY, node_id TEXT REFER
 CREATE INDEX IF NOT EXISTS calibration_time ON calibrations(node_id,at);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, node_id TEXT, at REAL, kind TEXT, message TEXT);
-CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, dedupe TEXT UNIQUE, created REAL, due REAL, text TEXT, state TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, error TEXT, delivered REAL);
+CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, dedupe TEXT UNIQUE, created REAL, due REAL, text TEXT, state TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, error TEXT, delivered REAL, channel TEXT);
 CREATE TABLE IF NOT EXISTS node_alert_state (node_id TEXT PRIMARY KEY, offline INTEGER DEFAULT 0, cycle_end REAL);
 """
 
 DEFAULT_SETTINGS = {
     "timezone": "Asia/Shanghai", "daily_time": "09:00", "daily_enabled": True,
-    "telegram_enabled": False, "chat_id": "", "thresholds": [80, 90, 95],
+    "telegram_enabled": False, "channels": [], "thresholds": [80, 90, 95],
     "offline_minutes": 5, "forecast_enabled": True, "reset_notice": True,
     "pre_reset_notice": True, "public_url": "", "proxy_url": "",
 }
@@ -61,9 +61,30 @@ class Store:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
             db.execute("INSERT OR IGNORE INTO settings VALUES ('general',?)", (canonical(DEFAULT_SETTINGS),))
+            self.migrate(db)
         setup = self.directory / "setup-token.txt"
         if not self.initialized() and not setup.exists():
             self.private_write(setup, secrets.token_urlsafe(24).encode())
+
+    # Legacy single-recipient installs become the channel "default". Its dedupe keys keep
+    # the old format so already-sent alerts are not repeated after upgrading.
+    LEGACY_CHANNEL = "default"
+
+    def migrate(self, db):
+        if "channel" not in [r[1] for r in db.execute("PRAGMA table_info(notifications)")]:
+            db.execute("ALTER TABLE notifications ADD COLUMN channel TEXT")
+        cfg = self.settings(db)
+        if "channels" in cfg:
+            return
+        token, chat = self.secret("telegram_token", db), str(cfg.pop("chat_id", "")).strip()
+        cfg["channels"] = []
+        if token or chat:
+            cfg["channels"].append({"id": self.LEGACY_CHANNEL, "name": "默认", "chat_id": chat, "enabled": True, "daily": True, "alerts": True})
+            if token:
+                self.set_secret("telegram_token:"+self.LEGACY_CHANNEL, token, db)
+            db.execute("UPDATE notifications SET channel=? WHERE channel IS NULL", (self.LEGACY_CHANNEL,))
+        db.execute("DELETE FROM settings WHERE key='telegram_token'")
+        db.execute("UPDATE settings SET value=? WHERE key='general'", (canonical(cfg),))
 
     @staticmethod
     def private_write(path: Path, value: bytes):
@@ -109,8 +130,15 @@ class Store:
     def event(self, db, node_id, kind, message, now=None):
         db.execute("INSERT INTO events VALUES (?,?,?,?,?)", (uid(), node_id, now or time.time(), kind, message))
 
-    def enqueue(self, db, key, text, now=None):
+    def enqueue(self, db, key, text, now=None, kind="alert", channel=None):
+        """Queue one copy per receiving channel; returns the inserted row ids.
+
+        kind is "daily", "alert" or "test". A named channel is targeted even when it is
+        switched off, so an administrator can test it before enabling.
+        """
         now = now or time.time()
+        targets = [c for c in self.settings(db).get("channels", [])
+                   if (c["id"] == channel if channel else c.get("enabled") and (kind == "test" or c.get("daily" if kind == "daily" else "alerts")))]
         # UTF-16 units are conservatively bounded below the Telegram message limit.
         chunks, current = [], ""
         for line in text.splitlines(keepends=True):
@@ -121,8 +149,14 @@ class Store:
             current += line
         if current:
             chunks.append(current)
-        for i, chunk in enumerate(chunks):
-            db.execute("INSERT OR IGNORE INTO notifications(id,dedupe,created,due,text) VALUES(?,?,?,?,?)", (uid(), f"{key}:{i}", now, now, chunk))
+        ids = []
+        for target in targets:
+            prefix = key if target["id"] == self.LEGACY_CHANNEL else f"{key}@{target['id']}"
+            for i, chunk in enumerate(chunks):
+                row_id = uid()
+                if db.execute("INSERT OR IGNORE INTO notifications(id,dedupe,created,due,text,channel) VALUES(?,?,?,?,?,?)", (row_id, f"{prefix}:{i}", now, now, chunk, target["id"])).rowcount:
+                    ids.append(row_id)
+        return ids
 
     def backup(self, destination: Path):
         destination.parent.mkdir(parents=True, exist_ok=True)

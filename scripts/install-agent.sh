@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-SERVER=""; TOKEN=""; USE_PROXY=0; INTERFACE=""; UPGRADE=0
+SERVER=""; TOKEN=""; USE_PROXY=0; PROXY_STDIN=0; INTERFACE=""; UPGRADE=0
 BASE=/opt/traffic-sentinel
 STATE=/var/lib/traffic-sentinel
 while [[ $# -gt 0 ]]; do
@@ -10,6 +10,8 @@ while [[ $# -gt 0 ]]; do
     --server) SERVER="$2"; shift 2;;
     --token) TOKEN="$2"; shift 2;;
     --proxy) USE_PROXY=1; shift;;
+    # Proxy URL piped on stdin by the generated command, never a process argument.
+    --proxy-stdin) USE_PROXY=1; PROXY_STDIN=1; shift;;
     --interface) INTERFACE="$2"; shift 2;;
     --upgrade) UPGRADE=1; shift;;
     *) echo "未知参数：$1" >&2; exit 1;;
@@ -42,7 +44,13 @@ TASK_DIR=$(mktemp -d /tmp/sentinel-install.XXXXXXXX)
 cleanup() { case "$TASK_DIR" in /tmp/sentinel-install.*) rm -rf -- "$TASK_DIR";; esac; }
 trap cleanup EXIT
 CURL=(curl --fail --silent --show-error --connect-timeout 15 --max-time 120 --noproxy '')
-if [[ "$USE_PROXY" -eq 1 ]]; then
+if [[ "$PROXY_STDIN" -eq 1 ]]; then
+  PROXY=""
+  IFS= read -r PROXY || true
+  [[ -n "$PROXY" ]] || { echo '未从标准输入读取到 SOCKS5 代理地址'; exit 1; }
+  printf '%s' "$PROXY" > "$TASK_DIR/proxy-url"
+  unset PROXY
+elif [[ "$USE_PROXY" -eq 1 ]]; then
   read -r -s -p 'SOCKS5 URL（例如 socks5h://user:password@host:1080）：' PROXY
   printf '\n'
   printf '%s' "$PROXY" > "$TASK_DIR/proxy-url"

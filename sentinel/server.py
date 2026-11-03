@@ -26,7 +26,7 @@ from . import __version__
 from .accounting import node_view, history
 from .core import canonical, cycle_at, digest, finite_timestamp, password_hash, password_ok, uid, validate_profile
 from .models import Credentials, NodeInput, Enrollment, Report, Calibration
-from .network import validate_proxy, validate_url
+from .network import validate_agent_proxy, validate_proxy, validate_url
 from .storage import Store
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -238,8 +238,8 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             db.execute("DELETE FROM enrollments WHERE node_id=?", (node_id,))
             db.execute("INSERT INTO enrollments VALUES(?,?,?)", (digest(token), node_id, time.time()+1800))
         command = f"curl -fsS {shlex.quote(server+'/install.sh')} -o install-sentinel.sh && sudo bash install-sentinel.sh --server {shlex.quote(server)} --token {shlex.quote(token)}"
-        return {"token": token, "server": server, "expires_in": 1800, "linux_command": command,
-                "proxy_command": f"# 使用代理下载，安装时继续读取代理配置\ncurl --config ./proxy-curl.conf --noproxy '' -fsS {shlex.quote(server+'/install.sh')} -o install-sentinel.sh && sudo bash install-sentinel.sh --server {shlex.quote(server)} --token {shlex.quote(token)} --proxy",
+        # The admin UI embeds the saved default Agent proxy into the SOCKS5 install command.
+        return {"token": token, "server": server, "expires_in": 1800, "linux_command": command, "agent_proxy": store.secret("agent_proxy"),
                 "windows_command": f'.\\.venv\\Scripts\\python.exe -m sentinel.agent enroll --server "{server}" --token "{token}" --data "agent-data/{node_id}"'}
 
     @app.put("/api/nodes/{node_id}/billing", dependencies=[Depends(admin)])
@@ -288,11 +288,40 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             store.event(db, node_id, "calibrated", "已按商家余额校准；历史采集记录保持不变")
         return {"ok": True}
 
+    MAX_CHANNELS = 20
+
+    def channel_view(channel):
+        return {**channel, "token_configured": bool(store.secret("telegram_token:"+channel["id"]))}
+
+    def channel_input(body: dict, current: dict | None = None):
+        channel = dict(current or {})
+        name = str(body.get("name", channel.get("name", ""))).strip()
+        chat = str(body.get("chat_id", channel.get("chat_id", ""))).strip()
+        if not name or len(name) > 40:
+            raise ValueError("渠道名称应为 1～40 个字符")
+        if not chat or len(chat) > 100 or any(ch.isspace() for ch in chat):
+            raise ValueError("请填写有效的 Chat ID")
+        channel.update(name=name, chat_id=chat)
+        for flag in ("enabled", "daily", "alerts"):
+            value = body.get(flag, channel.get(flag, True))
+            if not isinstance(value, bool):
+                raise ValueError("开关设置必须是布尔值")
+            channel[flag] = value
+        token = str(body.get("bot_token", "")).strip()
+        if token and (len(token) > 200 or ":" not in token or "/" in token or " " in token):
+            raise ValueError("Bot Token 格式无效")
+        return channel, token
+
+    def save_settings(db, cfg, message):
+        db.execute("UPDATE settings SET value=? WHERE key='general'", (canonical(cfg),))
+        store.event(db, None, "settings", message)
+
     @app.get("/api/settings", dependencies=[Depends(admin)])
     def settings_get():
         cfg = store.settings()
-        cfg["token_configured"] = bool(store.secret("telegram_token"))
+        cfg["channels"] = [channel_view(c) for c in cfg["channels"]]
         cfg["proxy_configured"] = bool(store.secret("telegram_proxy"))
+        cfg["agent_proxy_configured"] = bool(store.secret("agent_proxy"))
         cfg["proxy_url"] = ""
         return cfg
 
@@ -300,7 +329,7 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
     def settings_put(body: dict):
         with store.connect() as db:
             cfg = store.settings(db)
-            for key in ("timezone", "daily_time", "daily_enabled", "telegram_enabled", "chat_id", "thresholds", "offline_minutes", "forecast_enabled", "reset_notice", "pre_reset_notice", "public_url"):
+            for key in ("timezone", "daily_time", "daily_enabled", "telegram_enabled", "thresholds", "offline_minutes", "forecast_enabled", "reset_notice", "pre_reset_notice", "public_url"):
                 if key in body:
                     cfg[key] = body[key]
             try:
@@ -319,48 +348,94 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             if not isinstance(cfg["thresholds"], list) or not 1 <= len(cfg["thresholds"]) <= 10 or any(not 1 <= float(t) <= 100 for t in cfg["thresholds"]):
                 raise ValueError("告警阈值应为 1～100 的百分比列表")
             cfg["thresholds"] = sorted(set(float(t) for t in cfg["thresholds"]))
-            cfg["chat_id"] = str(cfg["chat_id"]).strip()
-            if len(cfg["chat_id"]) > 100:
-                raise ValueError("Chat ID 太长")
             if cfg["public_url"]:
                 cfg["public_url"] = validate_url(cfg["public_url"])
-            token = str(body.get("bot_token", "")).strip()
-            if token:
-                if len(token) > 200 or ":" not in token or "/" in token or " " in token:
-                    raise ValueError("Bot Token 格式无效")
-                store.set_secret("telegram_token", token, db)
-            if body.get("clear_token"):
-                store.set_secret("telegram_token", "", db)
             if body.get("proxy_url"):
                 store.set_secret("telegram_proxy", validate_proxy(body["proxy_url"]), db)
             if body.get("clear_proxy"):
                 store.set_secret("telegram_proxy", "", db)
-            if cfg["telegram_enabled"] and (not cfg["chat_id"] or not store.secret("telegram_token", db)):
-                raise ValueError("启用 Telegram 前请填写 Bot Token 和 Chat ID")
-            db.execute("UPDATE settings SET value=? WHERE key='general'", (canonical(cfg),))
-            store.event(db, None, "settings", "通知与系统设置已保存")
+            if body.get("agent_proxy_url"):
+                store.set_secret("agent_proxy", validate_agent_proxy(body["agent_proxy_url"]), db)
+            if body.get("clear_agent_proxy"):
+                store.set_secret("agent_proxy", "", db)
+            if cfg["telegram_enabled"] and not any(c["enabled"] for c in cfg["channels"]):
+                raise ValueError("启用 Telegram 前请先添加并启用至少一个通知渠道")
+            save_settings(db, cfg, "通知与系统设置已保存")
         return {"ok": True}
 
+    @app.post("/api/telegram/channels", dependencies=[Depends(admin)])
+    def channel_create(body: dict):
+        with store.connect() as db:
+            cfg = store.settings(db)
+            if len(cfg["channels"]) >= MAX_CHANNELS:
+                raise ValueError(f"最多添加 {MAX_CHANNELS} 个通知渠道")
+            channel, token = channel_input(body)
+            if not token:
+                raise ValueError("请填写 Bot Token")
+            channel["id"] = uid()
+            store.set_secret("telegram_token:"+channel["id"], token, db)
+            cfg["channels"].append(channel)
+            save_settings(db, cfg, f"已添加 Telegram 通知渠道：{channel['name']}")
+        return channel_view(channel)
+
+    @app.put("/api/telegram/channels/{channel_id}", dependencies=[Depends(admin)])
+    def channel_update(channel_id: str, body: dict):
+        with store.connect() as db:
+            cfg = store.settings(db)
+            index = next((i for i, c in enumerate(cfg["channels"]) if c["id"] == channel_id), None)
+            if index is None:
+                raise HTTPException(404, "通知渠道不存在")
+            channel, token = channel_input(body, cfg["channels"][index])
+            if token:
+                store.set_secret("telegram_token:"+channel_id, token, db)
+            cfg["channels"][index] = channel
+            if cfg["telegram_enabled"] and not any(c["enabled"] for c in cfg["channels"]):
+                raise ValueError("Telegram 通知已启用，至少保留一个启用的渠道；或先关闭 Telegram 通知")
+            save_settings(db, cfg, f"已更新 Telegram 通知渠道：{channel['name']}")
+        return channel_view(channel)
+
+    @app.delete("/api/telegram/channels/{channel_id}", dependencies=[Depends(admin)])
+    def channel_delete(channel_id: str):
+        with store.connect() as db:
+            cfg = store.settings(db)
+            channel = next((c for c in cfg["channels"] if c["id"] == channel_id), None)
+            if not channel:
+                raise HTTPException(404, "通知渠道不存在")
+            cfg["channels"].remove(channel)
+            # Deleting the last enabled channel switches Telegram off rather than failing.
+            if cfg["telegram_enabled"] and not any(c["enabled"] for c in cfg["channels"]):
+                cfg["telegram_enabled"] = False
+            db.execute("DELETE FROM settings WHERE key=?", ("telegram_token:"+channel_id,))
+            db.execute("UPDATE notifications SET state='expired',error='通知渠道已删除' WHERE channel=? AND state IN ('pending','retry','sending')", (channel_id,))
+            save_settings(db, cfg, f"已删除 Telegram 通知渠道：{channel['name']}")
+        return {"ok": True, "telegram_enabled": cfg["telegram_enabled"]}
+
     @app.post("/api/telegram/test", dependencies=[Depends(admin)])
-    def telegram_test():
+    def telegram_test(body: dict | None = None):
         from .notifications import Scheduler
+        channel = (body or {}).get("channel") or None
         cfg = store.settings()
-        if not cfg["telegram_enabled"]:
-            raise ValueError("请先保存并启用 Telegram 配置")
-        key = "manual-test:" + uid()
+        names = {c["id"]: c["name"] for c in cfg["channels"]}
+        if channel and channel not in names:
+            raise HTTPException(404, "通知渠道不存在")
+        if not channel and not any(c["enabled"] for c in cfg["channels"]):
+            raise ValueError("还没有启用的通知渠道")
         with store.connect() as db:
-            store.enqueue(db, key, "✅ 流量哨连接测试成功。日报与流量告警将发送到此会话。")
-        Scheduler(store, telegram_transport).deliver()
+            ids = store.enqueue(db, "manual-test:"+uid(), "✅ 流量哨连接测试成功。日报与流量告警将发送到此会话。", kind="test", channel=channel)
+        Scheduler(store, telegram_transport).deliver(only=ids)
         with store.connect() as db:
-            row = db.execute("SELECT state,error FROM notifications WHERE dedupe=?", (key+":0",)).fetchone()
-        return dict(row)
+            rows = [dict(r) for r in db.execute(f"SELECT channel,state,error FROM notifications WHERE id IN ({','.join('?'*len(ids))})", ids)]
+        results = [{**r, "name": names.get(r["channel"], "")} for r in rows]
+        failed = [r for r in results if r["state"] != "sent"]
+        return {"state": "failed" if failed else "sent", "error": "；".join(f"{r['name']}：{r['error'] or '等待重试'}" for r in failed), "results": results}
 
     @app.post("/api/telegram/daily", dependencies=[Depends(admin)])
     def daily_now():
         from .notifications import Scheduler
         if not store.settings()["telegram_enabled"]:
             raise ValueError("请先启用 Telegram")
-        Scheduler(store, telegram_transport).queue_daily(manual=True)
+        if not Scheduler(store, telegram_transport).queue_daily(manual=True):
+            raise ValueError("没有勾选接收日报的已启用渠道")
         return {"ok": True}
 
     @app.get("/api/telegram/preview", dependencies=[Depends(admin)])
@@ -371,7 +446,9 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
     @app.get("/api/events", dependencies=[Depends(admin)])
     def events():
         with store.connect() as db:
-            return {"events": [dict(r) for r in db.execute("SELECT e.*,n.name AS node_name FROM events e LEFT JOIN nodes n ON e.node_id=n.id ORDER BY at DESC LIMIT 150")], "notifications": [dict(r) for r in db.execute("SELECT * FROM notifications ORDER BY created DESC LIMIT 100")]}
+            names = {c["id"]: c["name"] for c in store.settings(db)["channels"]}
+            notifications = [{**dict(r), "channel_name": names.get(r["channel"], "")} for r in db.execute("SELECT * FROM notifications ORDER BY created DESC LIMIT 100")]
+            return {"events": [dict(r) for r in db.execute("SELECT e.*,n.name AS node_name FROM events e LEFT JOIN nodes n ON e.node_id=n.id ORDER BY at DESC LIMIT 150")], "notifications": notifications}
 
     @app.get("/api/backup", dependencies=[Depends(admin)])
     def backup():

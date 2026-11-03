@@ -55,7 +55,7 @@ class Scheduler:
         key = "manual-daily:"+uid() if manual else "daily:"+date
         text = self.daily_text(now)
         with self.store.connect() as db:
-            self.store.enqueue(db, key, text, now)
+            return self.store.enqueue(db, key, text, now, kind="daily")
 
     def tick(self, now=None):
         now = now or time.time()
@@ -97,33 +97,54 @@ class Scheduler:
             db.execute("UPDATE notifications SET state='expired',error='超过24小时未发送' WHERE state IN ('pending','retry') AND created<?", (now-86400,))
         self.deliver(now)
 
-    def deliver(self, now=None):
+    def deliver(self, now=None, only=None, limit=20):
+        """Send due messages, oldest first, at most `limit` per call.
+
+        `only` restricts delivery to specific row ids (manual tests); those may target a
+        channel that is switched off, and bypass the global Telegram switch.
+        """
         now = now or time.time()
         cfg = self.store.settings()
-        if not cfg["telegram_enabled"]:
-            return
-        token = self.store.secret("telegram_token")
-        if not token or not cfg["chat_id"]:
-            return
-        with self.store.connect() as db:
-            db.execute("UPDATE notifications SET state='retry' WHERE state='sending' AND due<?", (now,))
-            db.execute("BEGIN IMMEDIATE") if not db.in_transaction else None
-            row = db.execute("SELECT * FROM notifications WHERE state IN ('pending','retry') AND due<=? ORDER BY created LIMIT 1", (now,)).fetchone()
-            if not row:
+        channels = {c["id"]: c for c in cfg.get("channels", []) if only or c.get("enabled")}
+        if not only:
+            if not cfg["telegram_enabled"]:
                 return
-            db.execute("UPDATE notifications SET state='sending',due=?,attempts=attempts+1 WHERE id=?", (now+300, row["id"]))
+            with self.store.connect() as db:
+                marks = ",".join("?"*len(channels))
+                db.execute(f"UPDATE notifications SET state='expired',error='通知渠道已删除或停用' WHERE state IN ('pending','retry','sending') AND (channel IS NULL OR channel NOT IN ({marks}))", tuple(channels))
+        for _ in range(limit):
+            with self.store.connect() as db:
+                db.execute("UPDATE notifications SET state='retry' WHERE state='sending' AND due<?", (now,))
+                db.execute("BEGIN IMMEDIATE") if not db.in_transaction else None
+                query, params = "SELECT * FROM notifications WHERE state IN ('pending','retry') AND due<=?", [now]
+                if only:
+                    query += f" AND id IN ({','.join('?'*len(only))})"
+                    params += list(only)
+                row = db.execute(query+" ORDER BY created LIMIT 1", params).fetchone()
+                if not row:
+                    return
+                db.execute("UPDATE notifications SET state='sending',due=?,attempts=attempts+1 WHERE id=?", (now+300, row["id"]))
+            self.send(row, channels.get(row["channel"]), cfg, now)
+
+    def send(self, row, channel, cfg, now):
         error, retry = "", min(3600, 30*2**min(row["attempts"], 7))
-        try:
-            with client(self.store.secret("telegram_proxy"), transport=self.transport) as http:
-                response = http.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": cfg["chat_id"], "text": row["text"]})
-                body = response.json()
-                if not response.is_success or not body.get("ok"):
-                    # Only the status is stored; remote text or exception URLs may echo secrets.
-                    error = f"Telegram 返回错误 {response.status_code}，请检查 Token、Chat ID 和网络"
-                    if response.status_code == 429:
-                        retry = max(1, min(86400, int(body.get("parameters", {}).get("retry_after", 60))))
-        except Exception as exc:
-            error = f"发送失败：{type(exc).__name__}，将自动重试"
+        token = self.store.secret("telegram_token:"+channel["id"]) if channel else ""
+        if not channel:
+            error, retry = "通知渠道已删除", 86400
+        elif not token or not channel.get("chat_id"):
+            error = "该通知渠道缺少 Bot Token 或 Chat ID"
+        else:
+            try:
+                with client(self.store.secret("telegram_proxy"), transport=self.transport) as http:
+                    response = http.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": channel["chat_id"], "text": row["text"]})
+                    body = response.json()
+                    if not response.is_success or not body.get("ok"):
+                        # Only the status is stored; remote text or exception URLs may echo secrets.
+                        error = f"Telegram 返回错误 {response.status_code}，请检查 Token、Chat ID 和网络"
+                        if response.status_code == 429:
+                            retry = max(1, min(86400, int(body.get("parameters", {}).get("retry_after", 60))))
+            except Exception as exc:
+                error = f"发送失败：{type(exc).__name__}，将自动重试"
         with self.store.connect() as db:
             db.execute("UPDATE notifications SET state=?,error=?,due=?,delivered=? WHERE id=?", ("retry" if error else "sent", error, now+retry if error else now, None if error else now, row["id"]))
 
