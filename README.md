@@ -109,7 +109,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1 -Ski
 
 各 Agent 独立选择直连或 SOCKS5。代理故障会留存本地记录并重试，**不会自动回退直连**。支持代理端解析目标域名，以及用户名/密码认证。
 
-Linux：在“系统设置 → Agent 连接代理”保存默认 SOCKS5（也可在添加服务器时单独填写）。添加服务器时选择“SOCKS5 代理”，生成的一键命令已包含代理，直接在 VPS 上执行即可，无需额外准备文件。代理经管道传给 curl 和安装器，不会出现在进程参数中；命令本身含代理凭据，请勿公开分享。
+**添加代理**：系统设置 → Agent 连接代理 → 添加代理，分别填写地址（IP 或域名）、端口、用户名、密码（可选）和备注，可保存多条并逐条显示。“检测”按钮由主控经该代理访问自己的公开地址，用于验证代理在线和账号密码。用户名、密码可含任意字符，会自动编码；密码加密保存，不回显。
+
+**安装时选择代理**：添加服务器时在“连接方式”中选择一条代理，生成的一键命令已包含代理，直接在 VPS 上执行，无需额外准备文件。代理经管道传给 curl 和安装器，不会出现在进程参数中；命令本身含代理凭据，请勿公开分享。
+
+**更换已安装 Agent 的代理**（例如原代理失效）：代理失效后 Agent 连不上主控，面板无法远程下发新设置，需要在 VPS 上执行一条命令。打开服务器详情 → 管理 → 更换 Agent 代理，选择新代理或“直连主控”，生成命令后 SSH 登录该 VPS 以 root 执行。命令会经新线路下载最新 Agent，**先测试能否连上主控，失败则原配置和运行中的 Agent 都不变**，成功后切换并重启服务；注册身份和统计数据保留。Agent 会上报所用代理的地址（不含账号密码），面板据此在列表中显示代理名称。
+
+也可以在 VPS 上手动修改：
+
+```bash
+printf '%s\n' 'socks5h://用户名:密码@代理主机:1080' | sudo python3 /opt/traffic-sentinel/current/run-agent.py configure --data /var/lib/traffic-sentinel --proxy-stdin
+# 改回直连：把 --proxy-stdin 换成 --direct（不需要前面的 printf）
+sudo chown -R sentinel-agent:sentinel-agent /var/lib/traffic-sentinel && sudo systemctl restart sentinel-agent
+```
 
 Windows：在安装窗口选择 SOCKS5，注册命令会交互询问代理 URL。现有节点可以本地修改：
 

@@ -26,7 +26,8 @@ from . import __version__
 from .accounting import node_view, history
 from .core import canonical, cycle_at, digest, finite_timestamp, password_hash, password_ok, uid, validate_profile
 from .models import Credentials, NodeInput, Enrollment, Report, Calibration
-from .network import validate_agent_proxy, validate_proxy, validate_url
+from . import proxies as agent_proxies
+from .network import client, validate_proxy, validate_url
 from .storage import Store
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -190,6 +191,9 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
         with store.connect() as db:
             settings = store.settings(db)
             result = [node_view(db, row, report_zone=settings["timezone"], offline_seconds=settings["offline_minutes"]*60) for row in db.execute("SELECT * FROM nodes ORDER BY created DESC").fetchall()]
+            names = proxy_names(db)
+        for node in result:
+            node["proxy_name"] = names.get(node["meta"].get("proxy_endpoint", ""), "")
         return {"nodes": result, "now": time.time(), "timezone": settings["timezone"]}
 
     @app.post("/api/nodes", dependencies=[Depends(admin)])
@@ -232,7 +236,14 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             node = node_view(db, get_node(db, node_id), report_zone=settings["timezone"], offline_seconds=settings["offline_minutes"]*60)
             node["history"] = history(db, node_id, settings["timezone"])
             node["calibrations"] = [dict(r) for r in db.execute("SELECT * FROM calibrations WHERE node_id=? ORDER BY created DESC LIMIT 20", (node_id,))]
+            node["proxy_name"] = proxy_names(db).get(node["meta"].get("proxy_endpoint", ""), "")
         return node
+
+    def proxy_names(db):
+        return {agent_proxies.endpoint(e): e["note"] or agent_proxies.endpoint(e) for e in agent_proxies.load(store, db)}
+
+    def public_server(settings, request):
+        return validate_url(settings.get("public_url") or str(request.base_url).rstrip("/"))
 
     @app.post("/api/nodes/{node_id}/install", dependencies=[Depends(admin)])
     def install(node_id: str, request: Request):
@@ -241,14 +252,97 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             node = get_node(db, node_id)
             if node["credential"] and not node["disabled"]:
                 raise HTTPException(409, "此节点已有 Agent；重新安装前请先撤销旧凭据")
-            settings = store.settings(db)
-            server = validate_url(settings.get("public_url") or str(request.base_url).rstrip("/"))
+            server = public_server(store.settings(db), request)
+            entries = agent_proxies.load(store, db)
             db.execute("DELETE FROM enrollments WHERE node_id=?", (node_id,))
             db.execute("INSERT INTO enrollments VALUES(?,?,?)", (digest(token), node_id, time.time()+1800))
-        command = f"curl -fsS {shlex.quote(server+'/install.sh')} -o install-sentinel.sh && sudo bash install-sentinel.sh --server {shlex.quote(server)} --token {shlex.quote(token)}"
-        # The admin UI embeds the saved default Agent proxy into the SOCKS5 install command.
-        return {"token": token, "server": server, "expires_in": 1800, "linux_command": command, "agent_proxy": store.secret("agent_proxy"),
-                "windows_command": f'.\\.venv\\Scripts\\python.exe -m sentinel.agent enroll --server "{server}" --token "{token}" --data "agent-data/{node_id}"'}
+        # One command pair per saved proxy, so the UI can switch without minting a new token.
+        options = [{"id": e["id"], "label": agent_proxies.label(e),
+                    "linux_command": agent_proxies.install_command(server, token, agent_proxies.proxy_url(e)),
+                    "windows_command": agent_proxies.windows_enroll(server, token, node_id, agent_proxies.proxy_url(e))} for e in entries]
+        return {"token": token, "server": server, "expires_in": 1800,
+                "linux_command": agent_proxies.install_command(server, token),
+                "windows_command": agent_proxies.windows_enroll(server, token, node_id), "proxies": options}
+
+    @app.post("/api/nodes/{node_id}/switch-proxy", dependencies=[Depends(admin)])
+    def switch_proxy(node_id: str, request: Request, body: dict | None = None):
+        proxy_id = (body or {}).get("proxy_id") or ""
+        with store.connect() as db:
+            node = get_node(db, node_id)
+            server = public_server(store.settings(db), request)
+            entry = next((e for e in agent_proxies.load(store, db) if e["id"] == proxy_id), None)
+            if proxy_id and not entry:
+                raise HTTPException(404, "代理不存在")
+        url = agent_proxies.proxy_url(entry) if entry else ""
+        return {"linux_command": agent_proxies.switch_command(server, url),
+                "windows_command": agent_proxies.windows_switch(node_id, url),
+                "target": agent_proxies.label(entry) if entry else "直连主控", "server": server}
+
+    @app.get("/api/agent-proxies", dependencies=[Depends(admin)])
+    def proxy_list():
+        with store.connect() as db:
+            entries = agent_proxies.load(store, db)
+            used = defaultdict(list)
+            for row in db.execute("SELECT name,meta FROM nodes"):
+                used[json.loads(row["meta"]).get("proxy_endpoint", "")].append(row["name"])
+        return {"proxies": [agent_proxies.public(e, used.get(agent_proxies.endpoint(e), [])) for e in entries]}
+
+    @app.post("/api/agent-proxies", dependencies=[Depends(admin)])
+    def proxy_create(body: dict):
+        with store.connect() as db:
+            entries = agent_proxies.load(store, db)
+            if len(entries) >= agent_proxies.MAX_PROXIES:
+                raise ValueError(f"最多保存 {agent_proxies.MAX_PROXIES} 个代理")
+            entry = {"id": uid(), **agent_proxies.clean(body)}
+            entries.append(entry)
+            agent_proxies.save(store, db, entries)
+            store.event(db, None, "settings", f"已添加 Agent 代理：{agent_proxies.label(entry)}")
+        return agent_proxies.public(entry, [])
+
+    @app.put("/api/agent-proxies/{proxy_id}", dependencies=[Depends(admin)])
+    def proxy_update(proxy_id: str, body: dict):
+        with store.connect() as db:
+            entries = agent_proxies.load(store, db)
+            index = next((i for i, e in enumerate(entries) if e["id"] == proxy_id), None)
+            if index is None:
+                raise HTTPException(404, "代理不存在")
+            current = dict(entries[index])
+            if body.get("clear_password"):
+                current["password"] = ""
+            entries[index] = agent_proxies.clean(body, current)
+            agent_proxies.save(store, db, entries)
+            store.event(db, None, "settings", f"已更新 Agent 代理：{agent_proxies.label(entries[index])}；已安装的 Agent 需执行更换命令才会生效")
+        return agent_proxies.public(entries[index], [])
+
+    @app.delete("/api/agent-proxies/{proxy_id}", dependencies=[Depends(admin)])
+    def proxy_delete(proxy_id: str):
+        with store.connect() as db:
+            entries = agent_proxies.load(store, db)
+            entry = next((e for e in entries if e["id"] == proxy_id), None)
+            if not entry:
+                raise HTTPException(404, "代理不存在")
+            entries.remove(entry)
+            agent_proxies.save(store, db, entries)
+            store.event(db, None, "settings", f"已删除 Agent 代理：{agent_proxies.label(entry)}")
+        return {"ok": True}
+
+    @app.post("/api/agent-proxies/{proxy_id}/test", dependencies=[Depends(admin)])
+    def proxy_test(proxy_id: str, request: Request):
+        with store.connect() as db:
+            entry = next((e for e in agent_proxies.load(store, db) if e["id"] == proxy_id), None)
+            if not entry:
+                raise HTTPException(404, "代理不存在")
+            server = public_server(store.settings(db), request)
+        started = time.monotonic()
+        try:
+            with client(agent_proxies.proxy_url(entry), timeout=10) as http:
+                response = http.get(server+"/healthz")
+            ok = response.is_success
+            error = "" if ok else f"经代理访问主控返回 {response.status_code}"
+        except Exception as exc:
+            # Never echo the exception text: it can include the proxy URL with credentials.
+            ok, error = False, f"连接失败：{type(exc).__name__}"
+        return {"ok": ok, "error": error, "ms": round((time.monotonic()-started)*1000), "server": server}
 
     @app.put("/api/nodes/{node_id}/billing", dependencies=[Depends(admin)])
     def billing(node_id: str, body: dict):
@@ -329,7 +423,6 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
         cfg = store.settings()
         cfg["channels"] = [channel_view(c) for c in cfg["channels"]]
         cfg["proxy_configured"] = bool(store.secret("telegram_proxy"))
-        cfg["agent_proxy_configured"] = bool(store.secret("agent_proxy"))
         cfg["proxy_url"] = ""
         return cfg
 
@@ -362,10 +455,6 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
                 store.set_secret("telegram_proxy", validate_proxy(body["proxy_url"]), db)
             if body.get("clear_proxy"):
                 store.set_secret("telegram_proxy", "", db)
-            if body.get("agent_proxy_url"):
-                store.set_secret("agent_proxy", validate_agent_proxy(body["agent_proxy_url"]), db)
-            if body.get("clear_agent_proxy"):
-                store.set_secret("agent_proxy", "", db)
             if cfg["telegram_enabled"] and not any(c["enabled"] for c in cfg["channels"]):
                 raise ValueError("启用 Telegram 前请先添加并启用至少一个通知渠道")
             save_settings(db, cfg, "通知与系统设置已保存")

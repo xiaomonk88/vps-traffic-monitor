@@ -41,6 +41,7 @@ class AgentMeta(StrictModel):
     interfaces: list[str] = Field(default_factory=list, max_length=100)
     boot_id: str = Field(default="", max_length=120)
     connection: str = Field(default="direct", pattern="^(direct|socks5)$")
+    proxy_endpoint: str = Field(default="", max_length=300)
     queue: int = Field(default=0, ge=0)
     error: str = Field(default="", max_length=300)
     data_gap: bool = False

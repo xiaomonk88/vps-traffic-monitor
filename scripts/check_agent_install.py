@@ -2,7 +2,7 @@
 
 systemctl is substituted (no systemd in the test container); it runs an actual
 Agent collection/report as the service account. Enrollment and downloads use a
-local fixture server. Checks new installation, private state and upgrade repair.
+local fixture server. Checks new installation, private state, upgrade repair and proxy switching.
 """
 import json
 import os
@@ -31,6 +31,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(value).encode())
 
     def do_GET(self):
+        if self.path == '/healthz':
+            self.answer({'ok': True})
+            return
         name = self.path.removeprefix('/downloads/')
         if name not in ('sentinel-agent.zip', 'SHA256SUMS'):
             self.send_error(404)
@@ -87,7 +90,22 @@ exit 0
         assert (base/'releases').stat().st_mode & 0o777 == 0o755
         assert (state/'config.json').read_bytes() == original
         assert len(reports) >= 2
-        print('Fresh install, unprivileged collection/report, private credentials and upgrade permission repair passed')
+        # The proxy an Agent uses has died: a switch to another dead proxy is refused and
+        # leaves the config alone; switching to direct succeeds and the Agent reports again.
+        config = json.loads((state/'config.json').read_text())
+        config['proxy'] = 'socks5h://127.0.0.1:1'
+        (state/'config.json').write_text(json.dumps(config))
+        dead = (state/'config.json').read_bytes()
+        refused = subprocess.run([*command, '--upgrade', '--proxy-stdin'], input='socks5h://127.0.0.1:2\n', env=environment, text=True, capture_output=True, timeout=60)
+        assert refused.returncode != 0 and '原配置' in refused.stderr, refused.stderr
+        assert (state/'config.json').read_bytes() == dead
+        before = len(reports)
+        subprocess.run([*command, '--upgrade', '--direct'], env=environment, check=True, timeout=60)
+        switched = json.loads((state/'config.json').read_text())
+        assert switched['proxy'] == '' and switched['credential'] == config['credential']
+        assert (state/'config.json').stat().st_uid == int(subprocess.check_output(['id', '-u', 'sentinel-agent']))
+        assert len(reports) > before and reports[-1]['meta']['connection'] == 'direct'
+        print('Fresh install, unprivileged collection/report, private credentials, upgrade permission repair and proxy switching passed')
 finally:
     server.shutdown()
     server.server_close()

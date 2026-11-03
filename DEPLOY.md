@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main
 - Docker Debian 安装：`https://docs.docker.com/engine/install/debian/`
 - HTTPX SOCKS：`https://www.python-httpx.org/advanced/proxies/`
 
-将 `dist/traffic-sentinel-0.1.5-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
+将 `dist/traffic-sentinel-0.1.6-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
 
 ```bash
 cp .env.example .env
@@ -60,7 +60,9 @@ apt-get install -y python3 curl ca-certificates
 
 在面板添加节点，选择 Linux 和连接方式，复制生成的命令，以 root 或 sudo 运行。安装器检查环境、下载并校验包、创建专用账号与 systemd 服务。Linux 发布包内置纯 Python HTTP/SOCKS 依赖，不需要在被监控 VPS 上运行 pip；系统仍需 Python、标准库、系统 CA 和时区数据。
 
-代理安装时，在“系统设置 → Agent 连接代理”保存默认 SOCKS5（或添加服务器时单独填写），连接方式选择“SOCKS5 代理”。生成的命令已包含代理：下载脚本、下载 Agent 包、注册和后续运行都经过该代理，代理通过管道传入（`--proxy-stdin`），不出现在进程参数中。`socks5://` 会自动按 `socks5h` 处理，让代理解析目标域名。含凭据的命令不要提交到代码仓库或公开分享。
+代理安装时，先在“系统设置 → Agent 连接代理”添加代理（地址、端口、用户名、密码、备注），添加服务器时在“连接方式”中选择。生成的命令已包含代理：下载脚本、下载 Agent 包、注册和后续运行都经过该代理，代理通过管道传入（`--proxy-stdin`），不出现在进程参数中。`socks5://` 会自动按 `socks5h` 处理，让代理解析目标域名。含凭据的命令不要提交到代码仓库或公开分享。
+
+更换已安装节点的代理：服务器详情 → 管理 → 更换 Agent 代理，生成命令在该 VPS 执行。它等价于 `install-sentinel.sh --upgrade --proxy-stdin`（或 `--upgrade --direct`）：升级 Agent，经新线路测试主控健康检查，通过后才改写配置并重启服务。
 
 ```bash
 systemctl status sentinel-agent

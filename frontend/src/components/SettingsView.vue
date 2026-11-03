@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { Download, Eye, Send, ShieldCheck, Save, Plus, Pencil, Trash2, MessageCircle } from 'lucide-vue-next'
+import { Download, Eye, Send, ShieldCheck, Save, Plus, Pencil, Trash2, MessageCircle, Network, Activity } from 'lucide-vue-next'
 import { api, errorText } from '../api'
 import ModalShell from './ModalShell.vue'
 interface Channel { id: string; name: string; chat_id: string; enabled: boolean; daily: boolean; alerts: boolean; token_configured: boolean }
+interface AgentProxy { id: string; host: string; port: number; username: string; has_password: boolean; note: string; endpoint: string; nodes: string[] }
 const props = defineProps<{ section: 'notifications' | 'system' }>(); const emit = defineEmits<{ passwordChanged: []; saved: [] }>()
-const form = reactive<any>({ timezone:'Asia/Shanghai',daily_time:'09:00',daily_enabled:true,telegram_enabled:false,channels:[] as Channel[],thresholds:[80,90,95],offline_minutes:5,forecast_enabled:true,reset_notice:true,pre_reset_notice:true,public_url:'',proxy_url:'',clear_proxy:false,proxy_configured:false,agent_proxy_url:'',clear_agent_proxy:false,agent_proxy_configured:false })
+const form = reactive<any>({ timezone:'Asia/Shanghai',daily_time:'09:00',daily_enabled:true,telegram_enabled:false,channels:[] as Channel[],thresholds:[80,90,95],offline_minutes:5,forecast_enabled:true,reset_notice:true,pre_reset_notice:true,public_url:'',proxy_url:'',clear_proxy:false,proxy_configured:false })
 const thresholds = ref('80, 90, 95'), error = ref(''), success = ref(''), busy = ref(false), loading = ref(true), preview = ref<string | null>(null)
 const password = reactive({ old:'',new:'',confirm:'' })
 const blankChannel = () => ({ id:'', name:'', chat_id:'', bot_token:'', enabled:true, daily:true, alerts:true, token_configured:false })
 const channel = reactive(blankChannel()), channelOpen = ref(false), channelError = ref(''), removing = ref<Channel | null>(null), acting = ref('')
 async function load() { try { const cfg = await api('/settings'); Object.assign(form,cfg); thresholds.value = cfg.thresholds.join(', ') } catch(e) { error.value = errorText(e) } finally { loading.value = false } }
-async function save() { busy.value = true; error.value='';success.value=''; try { const levels=thresholds.value.split(/[,，\s]+/).filter(Boolean).map(Number); if (!levels.length || levels.some(n=>!Number.isFinite(n)||n<1||n>100)) throw new Error('请输入 1～100 之间的告警百分比，以逗号分隔。'); await api('/settings','PUT',{...form,thresholds:levels}); form.proxy_url='';form.clear_proxy=false;form.agent_proxy_url='';form.clear_agent_proxy=false;await load();success.value='设置已保存。';emit('saved') } catch(e) { error.value=errorText(e) } finally { busy.value=false } }
+async function save() { busy.value = true; error.value='';success.value=''; try { const levels=thresholds.value.split(/[,，\s]+/).filter(Boolean).map(Number); if (!levels.length || levels.some(n=>!Number.isFinite(n)||n<1||n>100)) throw new Error('请输入 1～100 之间的告警百分比，以逗号分隔。'); await api('/settings','PUT',{...form,thresholds:levels}); form.proxy_url='';form.clear_proxy=false;await load();success.value='设置已保存。';emit('saved') } catch(e) { error.value=errorText(e) } finally { busy.value=false } }
 async function command(name: string) { error.value='';success.value='';busy.value=true;try { if(name==='preview') { preview.value=(await api('/telegram/preview')).text;return }; const result=await api(`/telegram/${name}`,'POST'); if(name==='test') { if(result.state==='sent') success.value=`Telegram 已确认 ${result.results.length} 个渠道的测试消息发送成功。`; else error.value=`部分测试消息未发送成功：${result.error}` } else success.value='日报已加入发送队列，请在事件记录中查看发送结果。' } catch(e) { error.value=errorText(e) } finally { busy.value=false } }
 async function changePassword() { error.value='';success.value='';if(password.new!==password.confirm) { error.value='两次输入的新密码不一致。';return };busy.value=true;try {await api('/password','POST',{old:password.old,new:password.new});emit('passwordChanged')} catch(e){error.value=errorText(e)}finally{busy.value=false} }
 async function backup() { error.value='';busy.value=true;try{const response=await fetch('/api/backup',{credentials:'same-origin'});if(!response.ok)throw new Error('备份生成失败，请刷新登录状态后重试。');const blob=await response.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`sentinel-backup-${new Date().toISOString().slice(0,10)}.zip`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);success.value='备份已生成并开始下载。'}catch(e){error.value=errorText(e)}finally{busy.value=false} }
@@ -24,7 +25,17 @@ async function channelAction(item: Channel, work: () => Promise<void>) { acting.
 const toggleChannel = (item: Channel) => channelAction(item, async () => { await api(`/telegram/channels/${item.id}`,'PUT',{ enabled:!item.enabled }); await reloadChannels() })
 const testChannel = (item: Channel) => channelAction(item, async () => { const result=await api('/telegram/test','POST',{ channel:item.id }); if(result.state==='sent') success.value=`测试消息已发送到“${item.name}”。`; else error.value=`“${item.name}”测试失败：${result.results[0]?.error || '已进入重试队列'}` })
 async function removeChannel() { const item=removing.value; if(!item) return; await channelAction(item, async () => { const result=await api(`/telegram/channels/${item.id}`,'DELETE'); if(!result.telegram_enabled) form.telegram_enabled=false; removing.value=null; await reloadChannels(); success.value=`已删除通知渠道“${item.name}”。` }) }
-onMounted(load)
+
+// Agent proxies: a list of SOCKS5 endpoints chosen when generating install / switch commands.
+const blankProxy = () => ({ id:'', host:'', port:1080 as number | string, username:'', password:'', note:'', has_password:false, clear_password:false })
+const agentProxies = ref<AgentProxy[]>([]), proxy = reactive(blankProxy()), proxyOpen = ref(false), proxyError = ref(''), proxyRemoving = ref<AgentProxy | null>(null)
+const proxyTests = reactive<Record<string, { ok: boolean; text: string }>>({})
+async function loadProxies() { try { agentProxies.value = (await api('/agent-proxies')).proxies } catch(e) { error.value = errorText(e) } }
+function openProxy(item?: AgentProxy) { Object.assign(proxy, blankProxy(), item || {}, { password:'', clear_password:false }); proxyError.value=''; proxyOpen.value=true }
+async function saveProxy() { proxyError.value=''; busy.value=true; try { const body={ host:proxy.host, port:Number(proxy.port), username:proxy.username, password:proxy.password, note:proxy.note, clear_password:proxy.clear_password }; if(proxy.id) await api(`/agent-proxies/${proxy.id}`,'PUT',body); else await api('/agent-proxies','POST',body); proxyOpen.value=false; delete proxyTests[proxy.id]; await loadProxies(); error.value=''; success.value=`代理“${body.note || body.host}”已保存。${proxy.id ? '已安装的 Agent 需在服务器详情中执行更换命令后才会使用新设置。' : ''}` } catch(e) { proxyError.value=errorText(e) } finally { busy.value=false } }
+async function testProxy(item: AgentProxy) { acting.value=item.id; proxyTests[item.id]={ ok:false, text:'检测中…' }; try { const r=await api(`/agent-proxies/${item.id}/test`,'POST'); proxyTests[item.id] = r.ok ? { ok:true, text:`可用 · ${r.ms} ms` } : { ok:false, text:r.error } } catch(e) { proxyTests[item.id]={ ok:false, text:errorText(e) } } finally { acting.value='' } }
+async function removeProxy() { const item=proxyRemoving.value; if(!item) return; acting.value=item.id; try { await api(`/agent-proxies/${item.id}`,'DELETE'); proxyRemoving.value=null; await loadProxies(); success.value=`已删除代理“${item.note || item.endpoint}”。` } catch(e) { error.value=errorText(e) } finally { acting.value='' } }
+onMounted(() => { load(); if (props.section === 'system') loadProxies() })
 </script>
 
 <template>
@@ -133,17 +144,39 @@ onMounted(load)
           </div>
         </form>
 
-        <form class="panel setting-section" @submit.prevent="save">
+        <section class="panel setting-section">
           <header class="setting-head">
-            <div><h2>Agent 连接代理</h2><p class="muted">VPS 无法直连主控时，Agent 通过此 SOCKS5 代理上报。添加服务器选择“SOCKS5 代理”时，会自动写入安装命令。</p></div>
-            <span class="tag" :class="{ positive: form.agent_proxy_configured }">{{ form.agent_proxy_configured ? '已配置' : '未配置' }}</span>
+            <div><h2>Agent 连接代理</h2><p class="muted">VPS 无法直连主控时，Agent 通过 SOCKS5 代理上报。添加服务器或更换代理时，可从这里选择一条写入命令。</p></div>
+            <span class="tag" :class="{ positive: agentProxies.length }">{{ agentProxies.length ? `${agentProxies.length} 条` : '未添加' }}</span>
           </header>
           <div class="setting-body">
-            <label>默认 SOCKS5 代理<input v-model="form.agent_proxy_url" type="password" autocomplete="new-password" :placeholder="form.agent_proxy_configured ? '已保存，留空保持原值' : 'socks5h://用户名:密码@地址:端口'" /><small>代理需能从 VPS 访问；用户名或密码含特殊字符时请使用百分号编码（如 @ 写作 %40）。</small></label>
-            <label v-if="form.agent_proxy_configured" class="check-label"><input v-model="form.clear_agent_proxy" type="checkbox" />清除已保存的 Agent 默认代理</label>
-            <div class="form-actions"><button class="primary" :disabled="busy">保存 Agent 代理</button></div>
+            <div class="channel-list">
+              <div class="channel-list-head">
+                <span>SOCKS5 代理 <b>{{ agentProxies.length }}</b></span>
+                <button type="button" class="secondary small" @click="openProxy()"><Plus :size="15" />添加代理</button>
+              </div>
+              <div v-if="!agentProxies.length" class="channel-empty">
+                <Network :size="22" />
+                <p>还没有代理。添加后，生成 Agent 安装命令时可选择使用哪条代理。</p>
+              </div>
+              <div v-for="item in agentProxies" :key="item.id" class="proxy-row">
+                <span class="proxy-icon"><Network :size="16" /></span>
+                <div class="channel-main">
+                  <strong>{{ item.note || '未命名代理' }}</strong>
+                  <span>{{ item.endpoint }} · {{ item.username ? `用户 ${item.username}${item.has_password ? ' · 已设密码' : ''}` : '无认证' }}</span>
+                  <span class="proxy-usage">{{ item.nodes.length ? `使用中：${item.nodes.join('、')}` : '暂无服务器使用' }}</span>
+                </div>
+                <span v-if="proxyTests[item.id]" class="proxy-test" :class="{ ok: proxyTests[item.id].ok, bad: !proxyTests[item.id].ok && proxyTests[item.id].text !== '检测中…' }">{{ proxyTests[item.id].text }}</span>
+                <div class="channel-actions">
+                  <button type="button" class="text-button" :disabled="acting===item.id" title="从主控经此代理访问公开地址" @click="testProxy(item)"><Activity :size="14" />检测</button>
+                  <button type="button" class="icon-button" :aria-label="`编辑代理 ${item.note || item.endpoint}`" title="编辑" @click="openProxy(item)"><Pencil :size="15" /></button>
+                  <button type="button" class="icon-button danger" :aria-label="`删除代理 ${item.note || item.endpoint}`" title="删除" @click="proxyRemoving=item"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+            </div>
+            <p class="hint">“检测”由主控经该代理访问自己的公开地址，可验证代理在线与账号密码；VPS 到代理的线路仍以实际安装为准。修改代理不会自动影响已安装的 Agent，需在服务器详情“管理 → 更换 Agent 代理”中生成命令执行。</p>
           </div>
-        </form>
+        </section>
 
         <section class="panel setting-section">
           <header class="setting-head">
@@ -184,6 +217,32 @@ onMounted(load)
         <div v-if="channelError" class="alert error" role="alert">{{ channelError }}</div>
         <div class="actions modal-actions"><button type="button" class="secondary" @click="channelOpen=false">取消</button><button class="primary" :disabled="busy">{{ busy ? '正在保存…' : '保存渠道' }}</button></div>
       </form>
+    </ModalShell>
+
+    <ModalShell v-if="proxyOpen" :title="proxy.id ? `编辑代理 · ${proxy.note || proxy.host}` : '添加 SOCKS5 代理'" @close="proxyOpen=false">
+      <form class="stack" @submit.prevent="saveProxy">
+        <label>备注<input v-model="proxy.note" maxlength="60" placeholder="例如：香港中转、家宽出口" /></label>
+        <div class="proxy-grid">
+          <label>代理地址<input v-model="proxy.host" required maxlength="253" placeholder="IP 或域名，如 203.0.113.8" /></label>
+          <label>端口<input v-model="proxy.port" required type="number" min="1" max="65535" placeholder="1080" /></label>
+        </div>
+        <div class="form-grid">
+          <label>用户名（可选）<input v-model="proxy.username" maxlength="255" autocomplete="off" placeholder="无认证留空" /></label>
+          <label>密码（可选）<input v-model="proxy.password" type="password" maxlength="255" autocomplete="new-password" :disabled="proxy.clear_password" :placeholder="proxy.has_password ? '已保存，留空保持原值' : '无认证留空'" /></label>
+        </div>
+        <label v-if="proxy.has_password" class="check-label"><input v-model="proxy.clear_password" type="checkbox" />清除已保存的密码</label>
+        <p class="hint">按 SOCKS5（socks5h，由代理解析域名）连接。用户名和密码可包含任意字符，会自动编码。密码保存后不会回显。</p>
+        <div v-if="proxyError" class="alert error" role="alert">{{ proxyError }}</div>
+        <div class="actions modal-actions"><button type="button" class="secondary" @click="proxyOpen=false">取消</button><button class="primary" :disabled="busy">{{ busy ? '正在保存…' : '保存代理' }}</button></div>
+      </form>
+    </ModalShell>
+
+    <ModalShell v-if="proxyRemoving" title="删除代理" @close="proxyRemoving=null">
+      <div class="stack">
+        <p>确定删除代理“<strong>{{ proxyRemoving.note || proxyRemoving.endpoint }}</strong>”（{{ proxyRemoving.endpoint }}）？</p>
+        <div v-if="proxyRemoving.nodes.length" class="alert warn">仍有服务器在使用：{{ proxyRemoving.nodes.join('、') }}。删除只影响面板中的记录，这些 Agent 会继续使用原代理；如需更换，请在服务器详情中执行更换命令。</div>
+        <div class="actions"><button type="button" class="secondary" @click="proxyRemoving=null">取消</button><button type="button" class="danger-solid" :disabled="acting===proxyRemoving.id" @click="removeProxy">确认删除</button></div>
+      </div>
     </ModalShell>
 
     <ModalShell v-if="removing" title="删除通知渠道" @close="removing=null">

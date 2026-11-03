@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { RefreshCw, Settings2, SlidersHorizontal, Clock3, Trash2, ShieldOff, Server, ArrowDown, ArrowUp } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { RefreshCw, Settings2, SlidersHorizontal, Clock3, Trash2, ShieldOff, Server, ArrowDown, ArrowUp, Network, Terminal, Copy, Check } from 'lucide-vue-next'
 import ModalShell from './ModalShell.vue'
 import TrafficChart from './TrafficChart.vue'
 import { api, bytes, trafficBytes, dateTime, directions, errorText, statusLabels, units, type Node } from '../api'
@@ -20,6 +20,17 @@ async function checkPoint() { if (!active) return; try { const data = await api<
 async function calibrate() { await action(async () => { await api(`/nodes/${props.id}/calibrate`, 'POST', { checkpoint_id: checkpointId.value, remaining_bytes: Math.round(Number(remaining.value) * units[unit.value]), note: calibrationNote.value }); checkpointId.value = ''; checkpointAt.value = 0; remaining.value = ''; calibrationNote.value = '' }, '余额已校准，之后只扣除检查点以后的新增流量。') }
 async function danger() { await action(async () => { if (confirmAction.value === 'delete') { await api(`/nodes/${props.id}`, 'DELETE'); emit('close') } else { await api(`/nodes/${props.id}/revoke`, 'POST'); confirmAction.value = ''; confirmation.value = '' } }, '节点凭据已撤销。') }
 onMounted(async () => { await load(true); if (active) refreshTimer = setInterval(() => { if (!busy.value && !waiting.value) load() }, 15000) }); onBeforeUnmount(() => { active = false; if (poll) clearTimeout(poll); if (refreshTimer) clearInterval(refreshTimer) })
+
+// Switching the proxy of an installed Agent. A dead proxy means the Agent cannot reach the
+// panel, so the change is a command the user runs on the VPS (the installer tests it first).
+const switchOptions = ref<{ id: string; label: string }[]>([]), switchTarget = ref(''), switchResult = ref<any>(null), switchCopied = ref(false), switchLoaded = ref(false)
+const currentConnection = computed(() => { const meta = node.value?.meta || {}; return meta.connection === 'socks5' ? `SOCKS5 · ${node.value?.proxy_name || meta.proxy_endpoint || '未知代理（旧版 Agent 未上报代理地址）'}` : '直连主控' })
+const switchCommand = computed(() => switchResult.value ? (node.value?.meta.os === 'Windows' ? switchResult.value.windows_command : switchResult.value.linux_command) : '')
+async function loadSwitchOptions() { try { switchOptions.value = (await api('/agent-proxies')).proxies.map((p: any) => ({ id: p.id, label: `${p.note || '未命名代理'}（${p.endpoint}）` })); switchLoaded.value = true } catch (e) { error.value = errorText(e) } }
+async function makeSwitch() { error.value = ''; switchResult.value = null; try { switchResult.value = await api(`/nodes/${props.id}/switch-proxy`, 'POST', { proxy_id: switchTarget.value }) } catch (e) { error.value = errorText(e) } }
+async function copySwitch() { try { await navigator.clipboard.writeText(switchCommand.value); switchCopied.value = true; setTimeout(() => switchCopied.value = false, 1800) } catch { error.value = '浏览器不允许复制，请选中命令后手动复制。' } }
+watch(tab, value => { if (value === 'manage' && !switchLoaded.value) loadSwitchOptions() })
+watch(switchTarget, () => { switchResult.value = null })
 </script>
 
 <template>
@@ -142,6 +153,28 @@ onMounted(async () => { await load(true); if (active) refreshTimer = setInterval
           </div>
           <div class="form-actions"><button class="secondary" :disabled="busy">保存服务器信息</button></div>
         </form>
+        <section v-if="node.enrolled && !node.disabled" class="card-section switch-proxy">
+          <div class="section-heading"><h3><Network :size="16" />更换 Agent 代理</h3><span class="muted">当前：{{ currentConnection }}</span></div>
+          <p class="hint">代理失效时 Agent 无法连上主控，面板无法远程下发新设置，需要 SSH 登录这台 VPS 执行下方命令。命令会经新线路下载最新 Agent，<strong>先测试能否连上主控，失败则保持原配置不变</strong>，成功后切换并重启服务；统计数据和注册身份保留。</p>
+          <div class="switch-row">
+            <label>新的连接方式
+              <select v-model="switchTarget">
+                <option value="">直连主控</option>
+                <option v-for="item in switchOptions" :key="item.id" :value="item.id">SOCKS5 · {{ item.label }}</option>
+              </select>
+            </label>
+            <button type="button" class="secondary" @click="makeSwitch">生成更换命令</button>
+          </div>
+          <p v-if="switchLoaded && !switchOptions.length" class="hint">还没有保存代理，可在“系统设置 → Agent 连接代理”添加。</p>
+          <template v-if="switchResult">
+            <div class="code-block">
+              <div class="code-title"><span><Terminal :size="15" />在这台 VPS 上以 root 执行 · 切换为 {{ switchResult.target }}</span><button class="text-button" @click="copySwitch"><component :is="switchCopied ? Check : Copy" :size="15" />{{ switchCopied ? '已复制' : '复制命令' }}</button></div>
+              <pre tabindex="0">{{ switchCommand }}</pre>
+            </div>
+            <p class="hint"><template v-if="node.meta.os === 'Windows'">在项目根目录的 PowerShell 执行，然后关闭并重新运行采集命令。</template>执行后约 1 分钟，此处“当前”会显示新的连接方式。<template v-if="switchTarget">命令包含代理账号密码，请勿公开分享。</template></p>
+          </template>
+        </section>
+
         <section class="danger-zone">
           <h3>节点凭据与数据</h3>
           <p class="muted">撤销凭据会阻止旧 Agent 上报，历史记录保留。删除服务器会同时删除其统计与校准记录。</p>

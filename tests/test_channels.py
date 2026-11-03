@@ -84,16 +84,3 @@ def test_legacy_single_chat_becomes_default_channel(tmp_path):
         # Old dedupe keys still match, so the same daily report is not sent twice.
         assert store.enqueue(db, "daily:2026-11-03", "新日报", kind="daily") == []
         assert db.execute("SELECT channel FROM notifications WHERE id='old'").fetchone()[0] == "default"
-
-
-@pytest.mark.parametrize("proxy", ["http://127.0.0.1:1080", "socks5h://user:pa ss@host:1080", 'socks5h://u:"p@host:1080', "socks5h://host"])
-def test_agent_proxy_rejects_unsafe_values(client, proxy):
-    assert client.put("/api/settings", json={"agent_proxy_url": proxy}).status_code == 400
-
-
-def test_agent_proxy_is_offered_to_install_command(client):
-    proxy = "socks5h://user:p%40ss@10.0.0.1:1080"
-    assert client.put("/api/settings", json={"agent_proxy_url": proxy}).status_code == 200
-    assert client.get("/api/settings").json()["agent_proxy_configured"] is True
-    node_id = client.post("/api/nodes", json={"name": "代理节点"}).json()["id"]
-    assert client.post(f"/api/nodes/{node_id}/install").json()["agent_proxy"] == proxy

@@ -150,7 +150,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
                   <span class="node-symbol"><Server :size="18" :stroke-width="1.6" /></span>
                   <div>
                     <strong>{{ node.name }}</strong>
-                    <span class="node-sub">{{ node.group_name || (node.profile ? directions[node.profile.direction] : '计费待配置') }} · {{ node.meta.connection==='socks5' ? 'SOCKS5' : '直连' }}</span>
+                    <span class="node-sub">{{ node.group_name || (node.profile ? directions[node.profile.direction] : '计费待配置') }} · {{ node.meta.connection==='socks5' ? `SOCKS5${node.proxy_name ? ' · ' + node.proxy_name : ''}` : '直连' }}</span>
                   </div>
                 </div>
                 <div class="balance-cell">
@@ -191,7 +191,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
       </div>
     </main>
 
-    <AddNodeModal v-if="adding" :existing="installNode" @close="adding=false;refresh()" @created="refresh" />
+    <AddNodeModal v-if="adding" :existing="installNode" @close="adding=false;refresh()" @created="refresh" @settings="adding=false;page='system'" />
     <NodeDetail v-if="detailId" :key="detailId" :id="detailId" @close="detailId=''" @changed="refresh" @install="showInstall" />
   </div>
 

@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     import psutil
@@ -208,6 +209,7 @@ class Agent:
         meta = {"hostname": socket.gethostname(), "os": platform.system(), "version": __version__,
                 "interface": self.config["interface"], "interfaces": [i["name"] for i in interfaces()],
                 "boot_id": boot_id(), "connection": "socks5" if self.config.get("proxy") else "direct",
+                "proxy_endpoint": proxy_endpoint(self.config.get("proxy", "")),
                 "queue": queue, "error": self.error, "data_gap": bool(self.config.get("data_gap"))}
         body = {"epoch": state["epoch"], "samples": samples, "meta": meta}
         if self.checkpoint and not queue and samples:
@@ -255,6 +257,23 @@ class Agent:
             worker.join(timeout=35)
 
 
+def proxy_endpoint(proxy: str) -> str:
+    """host:port of the proxy, without credentials, so the panel can name it."""
+    p = urlparse(proxy) if proxy else None
+    if not p or not p.hostname or not p.port:
+        return ""
+    return f"[{p.hostname}]:{p.port}" if ":" in p.hostname else f"{p.hostname}:{p.port}"
+
+
+def read_proxy(args, prompt):
+    """Proxy URL from --proxy-file, piped stdin (--proxy-stdin) or an interactive prompt."""
+    if getattr(args, "proxy_file", None):
+        return validate_proxy(Path(args.proxy_file).read_text().strip())
+    if getattr(args, "proxy_stdin", False):
+        return validate_proxy(sys.stdin.readline().strip())
+    return validate_proxy(getpass.getpass(prompt)) if args.proxy else ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="流量哨 Agent")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -265,6 +284,7 @@ def main():
     enroll.add_argument("--interface")
     enroll.add_argument("--proxy", action="store_true", help="交互输入 SOCKS5 代理 URL，不写入命令历史")
     enroll.add_argument("--proxy-file", help="读取权限受限文件内的代理 URL")
+    enroll.add_argument("--proxy-stdin", action="store_true", help="从标准输入读取代理 URL（由面板生成的命令使用）")
     for name in ("enroll", "run", "once", "configure", "diagnose"):
         sub = enroll if name == "enroll" else commands.add_parser(name)
         sub.add_argument("--data", default="agent-data")
@@ -272,8 +292,10 @@ def main():
             sub.add_argument("--sample-seconds", type=int, default=10)
             sub.add_argument("--report-seconds", type=int, default=60)
         if name == "configure":
-            sub.add_argument("--proxy", action="store_true")
-            sub.add_argument("--direct", action="store_true")
+            sub.add_argument("--proxy", action="store_true", help="交互输入新的 SOCKS5 URL")
+            sub.add_argument("--proxy-file", help="从文件读取新的 SOCKS5 URL")
+            sub.add_argument("--proxy-stdin", action="store_true", help="从标准输入读取新的 SOCKS5 URL")
+            sub.add_argument("--direct", action="store_true", help="改为直连主控")
             sub.add_argument("--interface")
     args = parser.parse_args()
     if args.command == "interfaces":
@@ -286,8 +308,7 @@ def main():
         if path.exists():
             parser.error("节点已注册，请使用 run；修改代理使用 configure")
         server = validate_url(args.server)
-        proxy = Path(args.proxy_file).read_text().strip() if args.proxy_file else getpass.getpass("SOCKS5 URL（含可选认证）：") if args.proxy else ""
-        proxy = validate_proxy(proxy)
+        proxy = read_proxy(args, "SOCKS5 URL（含可选认证）：")
         interface = args.interface or default_interface()
         read_counter(interface)
         token = args.token or os.environ.pop("SENTINEL_ENROLL_TOKEN", "") or getpass.getpass("一次性注册凭据：")
@@ -302,8 +323,8 @@ def main():
         print(f'运行：python -m sentinel.agent run --data "{directory}"')
     elif args.command == "configure":
         cfg = json.loads(path.read_text(encoding="utf-8"))
-        if args.proxy:
-            cfg["proxy"] = validate_proxy(getpass.getpass("新的 SOCKS5 URL："))
+        if args.proxy or args.proxy_file or args.proxy_stdin:
+            cfg["proxy"] = read_proxy(args, "新的 SOCKS5 URL：")
         elif args.direct:
             cfg["proxy"] = ""
         with client(cfg.get("proxy", "")) as http:

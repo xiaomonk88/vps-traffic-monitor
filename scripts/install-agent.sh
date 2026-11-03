@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-SERVER=""; TOKEN=""; USE_PROXY=0; PROXY_STDIN=0; INTERFACE=""; UPGRADE=0
+SERVER=""; TOKEN=""; USE_PROXY=0; PROXY_STDIN=0; DIRECT=0; INTERFACE=""; UPGRADE=0
 BASE=/opt/traffic-sentinel
 STATE=/var/lib/traffic-sentinel
 while [[ $# -gt 0 ]]; do
@@ -14,10 +14,13 @@ while [[ $# -gt 0 ]]; do
     --proxy-stdin) USE_PROXY=1; PROXY_STDIN=1; shift;;
     --interface) INTERFACE="$2"; shift 2;;
     --upgrade) UPGRADE=1; shift;;
+    # With --upgrade: switch an installed Agent to direct connection.
+    --direct) DIRECT=1; shift;;
     *) echo "未知参数：$1" >&2; exit 1;;
   esac
 done
 [[ $(id -u) -eq 0 ]] || { echo '请以 root 或 sudo 运行安装器'; exit 1; }
+[[ "$USE_PROXY" -eq 0 || "$DIRECT" -eq 0 ]] || { echo '--direct 不能与代理参数同时使用'; exit 1; }
 command -v python3 >/dev/null || { echo '需要 Python 3.11+。Debian 可先安装：apt-get update && apt-get install -y python3 ca-certificates curl'; exit 1; }
 PYTHON=$(command -v python3)
 python3 -c 'import sys; assert sys.version_info >= (3,11), "需要 Python 3.11+"'
@@ -25,7 +28,7 @@ command -v curl >/dev/null || { echo '请先安装 curl 和 ca-certificates'; ex
 command -v systemctl >/dev/null || { echo '第一版安装器需要 systemd'; exit 1; }
 command -v runuser >/dev/null || { echo '需要 runuser（Debian/Ubuntu 的 util-linux 软件包）'; exit 1; }
 if [[ -f "$STATE/config.json" && "$UPGRADE" -ne 1 ]]; then
-  echo '已经安装；升级请加 --upgrade。修改代理请使用本地 configure 命令。'; exit 1
+  echo '已经安装；升级请加 --upgrade。更换代理请在面板“服务器详情 → 管理 → 更换 Agent 代理”生成命令。'; exit 1
 fi
 if [[ "$UPGRADE" -eq 1 && ! -f "$STATE/config.json" ]]; then
   echo '找不到原节点配置，不能升级'; exit 1
@@ -55,7 +58,8 @@ elif [[ "$USE_PROXY" -eq 1 ]]; then
   printf '\n'
   printf '%s' "$PROXY" > "$TASK_DIR/proxy-url"
   unset PROXY
-elif [[ "$UPGRADE" -eq 1 ]]; then
+elif [[ "$UPGRADE" -eq 1 && "$DIRECT" -eq 0 ]]; then
+  # Plain upgrade: download through the proxy the Agent already uses.
   python3 - "$STATE/config.json" "$TASK_DIR/proxy-url" <<'PY'
 import json, sys
 from pathlib import Path
@@ -120,6 +124,17 @@ if [[ ! -f "$STATE/config.json" ]]; then
   SENTINEL_ENROLL_TOKEN="$TOKEN" python3 "$RELEASE/run-agent.py" "${ARGS[@]}"
   unset TOKEN
   chown -R sentinel-agent:sentinel-agent "$STATE"
+elif [[ "$USE_PROXY" -eq 1 || "$DIRECT" -eq 1 ]]; then
+  # Switch the proxy of an installed Agent. configure first checks the new path to the
+  # server and leaves the old configuration untouched when that check fails.
+  ARGS=(configure --data "$STATE")
+  if [[ "$DIRECT" -eq 1 ]]; then ARGS+=(--direct); else ARGS+=(--proxy-file "$TASK_DIR/proxy-url"); fi
+  if ! "$PYTHON" "$RELEASE/run-agent.py" "${ARGS[@]}"; then
+    echo '新的连接方式无法访问主控，原配置和正在运行的 Agent 均未改动。请检查代理后重试。' >&2
+    exit 1
+  fi
+  chown -R sentinel-agent:sentinel-agent "$STATE"
+  echo "已切换为：$([[ "$DIRECT" -eq 1 ]] && echo 直连主控 || echo SOCKS5 代理)"
 fi
 systemctl stop sentinel-agent 2>/dev/null || true
 ln -s "$RELEASE" "$BASE/current.new"
@@ -165,4 +180,4 @@ if [[ "$START_FAILED" == 1 ]] || ! systemctl is-active --quiet sentinel-agent; t
   journalctl -u sentinel-agent -n 20 --no-pager >&2 || true
   exit 1
 fi
-printf '安装完成。查看状态：systemctl status sentinel-agent\n查看日志：journalctl -u sentinel-agent -n 50\n修改代理：sudo -u sentinel-agent python3 /opt/traffic-sentinel/current/run-agent.py configure --proxy --data /var/lib/traffic-sentinel\n修改后：systemctl restart sentinel-agent\n'
+printf '安装完成。查看状态：systemctl status sentinel-agent\n查看日志：journalctl -u sentinel-agent -n 50\n更换代理：在面板“服务器详情 → 管理 → 更换 Agent 代理”生成命令并在本机执行\n'
