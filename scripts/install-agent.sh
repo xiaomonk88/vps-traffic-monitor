@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-SERVER=""; TOKEN=""; USE_PROXY=0; PROXY_STDIN=0; DIRECT=0; INTERFACE=""; UPGRADE=0
+SERVER=""; TOKEN=""; USE_PROXY=0; PROXY_STDIN=0; DIRECT=0; INTERFACE=""; UPGRADE=0; REENROLL=0
 BASE=/opt/traffic-sentinel
 STATE=/var/lib/traffic-sentinel
 while [[ $# -gt 0 ]]; do
@@ -28,7 +28,13 @@ command -v curl >/dev/null || { echo '请先安装 curl 和 ca-certificates'; ex
 command -v systemctl >/dev/null || { echo '第一版安装器需要 systemd'; exit 1; }
 command -v runuser >/dev/null || { echo '需要 runuser（Debian/Ubuntu 的 util-linux 软件包）'; exit 1; }
 if [[ -f "$STATE/config.json" && "$UPGRADE" -ne 1 ]]; then
-  echo '已经安装；升级请加 --upgrade。更换代理请在面板“服务器详情 → 管理 → 更换 Agent 代理”生成命令。'; exit 1
+  if [[ -z "$TOKEN" ]]; then
+    echo '本机已安装 Agent。升级请加 --upgrade；重新注册请使用面板生成的带凭据安装命令；更换代理请在面板“服务器详情 → 管理 → 更换 Agent 代理”生成命令。'; exit 1
+  fi
+  # A fresh one-time token on an installed machine means "register this machine again"
+  # (e.g. the server was deleted and re-added, or its credential was revoked).
+  REENROLL=1
+  echo '检测到本机已安装 Agent，将用新凭据重新注册；原注册信息会备份，注册失败时自动恢复。'
 fi
 if [[ "$UPGRADE" -eq 1 && ! -f "$STATE/config.json" ]]; then
   echo '找不到原节点配置，不能升级'; exit 1
@@ -115,15 +121,35 @@ if ! runuser -u sentinel-agent -- "$PYTHON" "$RELEASE/run-agent.py" --help >/dev
   exit 1
 fi
 PREVIOUS=$(readlink "$BASE/current" 2>/dev/null || true)
+BACKUP=""
+if [[ "$REENROLL" -eq 1 ]]; then
+  # Keep the network interface chosen at the previous installation unless overridden.
+  [[ -n "$INTERFACE" ]] || INTERFACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("interface",""))' "$STATE/config.json" 2>/dev/null || true)
+  systemctl stop sentinel-agent 2>/dev/null || true
+  BACKUP="$STATE.bak-$(date +%Y%m%d%H%M%S)"
+  mv "$STATE" "$BACKUP"
+  mkdir -p "$STATE"
+  chown sentinel-agent:sentinel-agent "$STATE"
+  chmod 700 "$STATE"
+fi
 if [[ ! -f "$STATE/config.json" ]]; then
   [[ -n "$TOKEN" ]] || read -r -s -p '一次性注册凭据：' TOKEN
   ARGS=(enroll --server "$SERVER" --data "$STATE")
   [[ -z "$INTERFACE" ]] || ARGS+=(--interface "$INTERFACE")
   [[ "$USE_PROXY" -eq 0 ]] || ARGS+=(--proxy-file "$TASK_DIR/proxy-url")
   # Enrollment token is short-lived; prompt via stdin instead of a process argument.
-  SENTINEL_ENROLL_TOKEN="$TOKEN" python3 "$RELEASE/run-agent.py" "${ARGS[@]}"
+  if ! SENTINEL_ENROLL_TOKEN="$TOKEN" python3 "$RELEASE/run-agent.py" "${ARGS[@]}"; then
+    if [[ -n "$BACKUP" ]]; then
+      rm -rf -- "$STATE"
+      mv "$BACKUP" "$STATE"
+      systemctl start sentinel-agent 2>/dev/null || true
+      echo '重新注册失败，已恢复原注册并重启原 Agent。请在面板重新生成安装命令（凭据 30 分钟内有效、仅能使用一次）。' >&2
+    fi
+    exit 1
+  fi
   unset TOKEN
   chown -R sentinel-agent:sentinel-agent "$STATE"
+  [[ -z "$BACKUP" ]] || echo "重新注册成功。原注册信息已备份到 $BACKUP，确认无误后可删除。"
 elif [[ "$USE_PROXY" -eq 1 || "$DIRECT" -eq 1 ]]; then
   # Switch the proxy of an installed Agent. configure first checks the new path to the
   # server and leaves the old configuration untouched when that check fails.

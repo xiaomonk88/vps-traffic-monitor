@@ -19,6 +19,7 @@ state = Path('/var/lib/traffic-sentinel')
 assert not base.exists() and not state.exists(), 'Refusing to touch an existing installation'
 Path('/etc/systemd/system').mkdir(parents=True, exist_ok=True)
 reports = []
+enrollments = []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -45,7 +46,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         value = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         if self.path.endswith('/enroll'):
-            self.answer({'node_id': 'fixture-node', 'credential': 'fixture-credential'})
+            if value.get('token') == 'expired-token':
+                self.send_error(400)
+                return
+            enrollments.append(value)
+            self.answer({'node_id': f'fixture-node-{len(enrollments)}', 'credential': f'fixture-credential-{len(enrollments)}'})
         elif self.path.endswith('/report'):
             reports.append(value)
             self.answer({'ack': max((s['seq'] for s in value['samples']), default=0)})
@@ -105,7 +110,24 @@ exit 0
         assert switched['proxy'] == '' and switched['credential'] == config['credential']
         assert (state/'config.json').stat().st_uid == int(subprocess.check_output(['id', '-u', 'sentinel-agent']))
         assert len(reports) > before and reports[-1]['meta']['connection'] == 'direct'
-        print('Fresh install, unprivileged collection/report, private credentials, upgrade permission repair and proxy switching passed')
+        # Re-register an installed machine with a new token (server deleted and re-added).
+        before = json.loads((state/'config.json').read_text())
+        result = subprocess.run([*command, '--token', 'second-token'], env=environment, text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        after = json.loads((state/'config.json').read_text())
+        assert after['credential'] != before['credential'] and after['interface'] == before['interface']
+        backups = sorted(Path('/var/lib').glob('traffic-sentinel.bak-*'))
+        assert backups and json.loads((backups[-1]/'config.json').read_text())['credential'] == before['credential']
+        assert (state/'config.json').stat().st_uid == int(subprocess.check_output(['id', '-u', 'sentinel-agent']))
+        # A bad token must restore the previous registration instead of leaving no Agent.
+        current = (state/'config.json').read_bytes()
+        failed = subprocess.run([*command, '--token', 'expired-token'], env=environment, text=True, capture_output=True, timeout=60)
+        assert failed.returncode != 0 and '已恢复原注册' in failed.stderr, failed.stdout + failed.stderr
+        assert (state/'config.json').read_bytes() == current
+        # Without a token an installed machine is still refused.
+        refused = subprocess.run(command, env=environment, text=True, capture_output=True, timeout=60)
+        assert refused.returncode != 0 and '已安装 Agent' in refused.stdout
+        print('Fresh install, unprivileged collection/report, private credentials, upgrade permission repair, proxy switching and re-registration passed')
 finally:
     server.shutdown()
     server.server_close()
