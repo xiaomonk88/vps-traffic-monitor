@@ -4,7 +4,7 @@ set -euo pipefail
 umask 077
 
 REPOSITORY=xiaomonk88/vps-traffic-monitor
-RELEASE_VERSION=v0.1.7
+RELEASE_VERSION=v0.1.8
 BASE=/opt/traffic-sentinel-server
 PORT=""; BIND=""; UPGRADE=0; CHECK=0
 DEFAULT_PORT=18080; DEFAULT_BIND=0.0.0.0
@@ -14,7 +14,7 @@ usage() {
   cat <<'TEXT'
 流量哨主控一键安装（Debian 12 / 13）
 sudo bash install.sh [--port 18080] [--bind 0.0.0.0]
-sudo bash install.sh --upgrade [--port 18080] [--version v0.1.7]
+sudo bash install.sh --upgrade [--port 18080] [--version v0.1.8]
 
 以 Docker 运行单个容器，通过 http://服务器IP:端口 访问。
 HTTPS 与域名请用自己的反向代理（如 1Panel / Nginx）转发到 http://127.0.0.1:端口。
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_input() {
-  [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.7'
+  [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.8'
   if [[ -n "$PORT" ]]; then
     [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) || die '端口应为 1～65535 的数字'
     PORT=$((10#$PORT))

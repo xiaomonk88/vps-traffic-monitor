@@ -44,7 +44,7 @@ def test_telegram_429_respects_retry_and_hides_token(client, app):
     assert len(requests) == 2
 
 
-def test_daily_dedup_and_yesterday_timezone(client, app):
+def test_daily_dedup_and_report_timezone(client, app):
     enabled(client)
     scheduler = Scheduler(app.state.store)
     now = datetime(2026, 11, 3, 1, 0, tzinfo=timezone.utc).timestamp()
@@ -53,8 +53,8 @@ def test_daily_dedup_and_yesterday_timezone(client, app):
     with app.state.store.connect() as db:
         rows = db.execute("SELECT * FROM notifications").fetchall()
     assert len(rows) == 1
-    assert "2026-11-02" in rows[0]["text"]
-    assert "Asia/Shanghai" in rows[0]["text"]
+    # 01:00 UTC is 09:00 in the Asia/Shanghai report timezone: today so far.
+    assert "统计时段：2026-11-03 00:00 – 09:00" in rows[0]["text"]
 
 
 def test_quota_alert_merges_lower_tiers(client, app, node):

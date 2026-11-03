@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main
 - Docker Debian 安装：`https://docs.docker.com/engine/install/debian/`
 - HTTPX SOCKS：`https://www.python-httpx.org/advanced/proxies/`
 
-将 `dist/traffic-sentinel-0.1.7-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
+将 `dist/traffic-sentinel-0.1.8-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
 
 ```bash
 cp .env.example .env

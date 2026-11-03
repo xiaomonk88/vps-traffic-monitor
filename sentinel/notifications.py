@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .accounting import node_view
-from .core import human_bytes, uid
+from .core import human_bytes, time_left, traffic_bytes, uid
 from .network import client
 
 
@@ -17,28 +17,34 @@ class Scheduler:
         self.transport = transport
 
     def daily_text(self, now, node_ids=None):
-        """Daily report; `node_ids` limits it to the servers assigned to one channel."""
+        """Daily report of today's traffic; `node_ids` limits it to one channel's servers."""
         cfg = self.store.settings()
         local = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"]))
-        lines = ["📊 流量哨 · VPS 流量日报", f"统计日：{(local.date()-timedelta(days=1)).isoformat()}（{cfg['timezone']}）", "余额为本地估算，以各节点最近上报为准。", ""]
         with self.store.connect() as db:
             nodes = [node_view(db, r, now, cfg["timezone"], cfg["offline_minutes"]*60) for r in db.execute("SELECT * FROM nodes WHERE disabled=0").fetchall()
                      if node_ids is None or r["id"] in node_ids]
         nodes.sort(key=lambda n: (n["status"] == "online", -(n["percent"] or 0)))
+        tx, rx = sum(n["today"]["tx"] for n in nodes), sum(n["today"]["rx"] for n in nodes)
+        lines = ["📊 流量哨 · VPS 流量日报", f"统计时段：{local:%Y-%m-%d} 00:00 – {local:%H:%M}"]
+        if nodes:
+            lines.append(f"今日合计（{len(nodes)} 台）：上传 {traffic_bytes(tx)} / 下载 {traffic_bytes(rx)} / 总计 {traffic_bytes(tx+rx)}")
+        lines += ["余额为本地估算，以各节点最近上报为准。", ""]
         if not nodes:
             lines.append("暂无已添加的服务器。")
         for n in nodes:
             unit = n["profile"]["unit"] if n["profile"] else "GB"
+            today = n["today"]
             icon = "🟢" if n["status"] == "online" else "🟠"
-            lines += [f"{icon} {n['name']}", f"昨日上传：{human_bytes(n['yesterday']['tx'],unit)} / 下载：{human_bytes(n['yesterday']['rx'],unit)}"]
-            if n["yesterday"]["coverage"] < .95:
-                lines.append(f"昨日采集覆盖：{n['yesterday']['coverage']:.0%}，存在未采集或估算时段")
+            lines += [f"{icon} {n['name']}",
+                      f"今日上传：{traffic_bytes(today['tx'],unit)} / 下载：{traffic_bytes(today['rx'],unit)} / 合计：{traffic_bytes(today['tx']+today['rx'],unit)}"]
             if n["remaining"] is None:
                 lines.append("预计剩余：尚未校准")
             else:
                 lines.append(f"预计剩余：{human_bytes(n['remaining'],unit)}（已用 {n['percent']:.1f}%）")
             if n["cycle_end"]:
-                lines.append("下次重置："+datetime.fromtimestamp(n["cycle_end"], ZoneInfo(n["profile"]["timezone"])).strftime("%Y-%m-%d %H:%M")+f" {n['profile']['timezone']}")
+                # Shown in the billing timezone, matching the reset time the user configured.
+                reset = datetime.fromtimestamp(n["cycle_end"], ZoneInfo(n["profile"]["timezone"])).strftime("%Y-%m-%d %H:%M")
+                lines.append(f"下次重置：{reset}（{time_left(n['cycle_end']-now)}）")
             if not n["fresh"]:
                 lines.append("⚠️ 数据过期或尚未追平，余额可能偏高")
             if n["forecast_days"] is not None:

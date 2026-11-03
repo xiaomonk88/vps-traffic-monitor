@@ -127,5 +127,28 @@ def human_bytes(value: int | float, unit: str = "GB") -> str:
     return f"{value / UNITS.get(unit, 10**9):,.2f} {unit}"
 
 
+def traffic_bytes(value: int | float, unit: str = "GB") -> str:
+    """Auto-scaled size (B..PB, or B..PiB for binary plan units), so small days do not show 0.00 GB."""
+    binary = "iB" in unit
+    base = 1024 if binary else 1000
+    labels = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] if binary else ["B", "KB", "MB", "GB", "TB", "PB"]
+    amount, index = float(value), 0
+    while abs(amount) >= base and index < len(labels)-1:
+        amount /= base
+        index += 1
+    return f"{amount:,.0f} {labels[index]}" if index == 0 else f"{amount:,.2f} {labels[index]}"
+
+
+def time_left(seconds: float) -> str:
+    """"还剩 16 天 22 小时" style countdown."""
+    if seconds <= 0:
+        return "已到期"
+    days, rest = divmod(int(seconds), 86400)
+    hours = rest // 3600
+    if days:
+        return f"还剩 {days} 天 {hours} 小时" if hours else f"还剩 {days} 天"
+    return f"还剩 {hours} 小时" if hours else "不足 1 小时"
+
+
 def finite_timestamp(value: float) -> bool:
     return math.isfinite(value) and 0 < value < 4_102_444_800
