@@ -4,28 +4,32 @@ set -euo pipefail
 umask 077
 
 REPOSITORY=xiaomonk88/vps-traffic-monitor
-RELEASE_VERSION=v0.1.3
+RELEASE_VERSION=v0.1.4
 BASE=/opt/traffic-sentinel-server
-DOMAIN=""; EMAIL=""; UPGRADE=0; CHECK=0
+PORT=""; BIND=""; UPGRADE=0; CHECK=0
+DEFAULT_PORT=18080; DEFAULT_BIND=0.0.0.0
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'TEXT'
 流量哨主控一键安装（Debian 12 / 13）
-sudo bash install.sh [--domain traffic.example.com --email admin@example.com]
-sudo bash install.sh --upgrade [--version v0.1.3]
+sudo bash install.sh [--port 18080] [--bind 0.0.0.0]
+sudo bash install.sh --upgrade [--port 18080] [--version v0.1.4]
 
-首次运行交互填写域名和证书邮箱；域名应已解析到这台 VPS，80/443 可用。
-安装目录：/opt/traffic-sentinel-server；数据使用 Docker 命名卷保存。
+以 Docker 运行单个容器，通过 http://服务器IP:端口 访问。
+HTTPS 与域名请用自己的反向代理（如 1Panel / Nginx）转发到 http://127.0.0.1:端口。
+--port   面板端口，默认 18080；升级时沿用上次的设置。
+--bind   监听地址，默认 0.0.0.0；填 127.0.0.1 则只允许本机反代访问。
 --check  仅检查参数、系统和已有 Docker，不安装或修改文件。
 --help   显示此说明。
+安装目录：/opt/traffic-sentinel-server；数据使用 Docker 命名卷保存。
 TEXT
 }
 value() { [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 缺少参数"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --domain) value "$@"; DOMAIN="$2"; shift 2;;
-    --email) value "$@"; EMAIL="$2"; shift 2;;
+    --port) value "$@"; PORT="$2"; shift 2;;
+    --bind) value "$@"; BIND="$2"; shift 2;;
     --version) value "$@"; RELEASE_VERSION="$2"; shift 2;;
     --upgrade) UPGRADE=1; shift;;
     --check) CHECK=1; shift;;
@@ -35,16 +39,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_input() {
-  [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.1'
-  if [[ -n "$DOMAIN" ]]; then
-    [[ ${#DOMAIN} -le 253 && "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || die '域名格式无效；请只填写域名，不含 https://、端口和路径'
-    local label
-    local -a labels
-    IFS='.' read -r -a labels <<< "$DOMAIN"
-    for label in "${labels[@]}"; do [[ ${#label} -le 63 ]] || die '域名标签过长'; done
+  [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.4'
+  if [[ -n "$PORT" ]]; then
+    [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) || die '端口应为 1～65535 的数字'
+    PORT=$((10#$PORT))
   fi
-  if [[ -n "$EMAIL" ]]; then
-    [[ "$EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || die '邮箱格式无效'
+  if [[ -n "$BIND" ]]; then
+    local octet
+    local -a octets
+    [[ "$BIND" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die '监听地址应为 IPv4，例如 0.0.0.0 或 127.0.0.1'
+    IFS='.' read -r -a octets <<< "$BIND"
+    for octet in "${octets[@]}"; do (( 10#$octet <= 255 )) || die '监听地址无效'; done
   fi
 }
 validate_input
@@ -54,7 +59,7 @@ validate_input
 [[ "${ID:-}" == debian && "${VERSION_ID:-}" =~ ^(12|13)$ ]] || die '一键安装器目前只支持 Debian 12 / 13'
 case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) die '目前一键部署仅支持 amd64 / arm64';; esac
 if [[ "$CHECK" == 1 ]]; then
-  printf '系统：%s；版本：%s；配置格式有效。\n' "$PRETTY_NAME" "$RELEASE_VERSION"
+  printf '系统：%s；版本：%s；面板：%s:%s；配置格式有效。\n' "$PRETTY_NAME" "$RELEASE_VERSION" "${BIND:-$DEFAULT_BIND}" "${PORT:-$DEFAULT_PORT}"
   if command -v docker >/dev/null; then docker --version; docker compose version; else printf '尚未安装 Docker，正式安装时自动准备。\n'; fi
   exit 0
 fi
@@ -64,22 +69,14 @@ if [[ -f "$BASE/.env" && "$UPGRADE" != 1 ]]; then
 fi
 if [[ "$UPGRADE" == 1 ]]; then
   [[ -f "$BASE/.env" && -d "$BASE/current" ]] || die '未发现已安装的主控，首次安装不要加 --upgrade'
-  [[ -n "$DOMAIN" ]] || DOMAIN=$(sed -n 's/^SENTINEL_DOMAIN=//p' "$BASE/.env")
-  [[ -n "$EMAIL" ]] || EMAIL=$(sed -n 's/^ACME_EMAIL=//p' "$BASE/.env")
+  # Reuse the previous port and bind address; installs from Caddy-based versions lack them.
+  [[ -n "$PORT" ]] || PORT=$(sed -n 's/^SENTINEL_PORT=//p' "$BASE/.env")
+  [[ -n "$BIND" ]] || BIND=$(sed -n 's/^SENTINEL_BIND=//p' "$BASE/.env")
 fi
-prompt() {
-  local text="$1" answer
-  [[ -r /dev/tty ]] || die '非交互安装必须提供 --domain 和 --email'
-  printf '%s' "$text" >/dev/tty
-  IFS= read -r answer </dev/tty || die '未读取到输入'
-  printf '%s' "$answer"
-}
-[[ -n "$DOMAIN" ]] || DOMAIN=$(prompt '主控域名（例如 traffic.example.com）：')
-[[ -n "$EMAIL" ]] || EMAIL=$(prompt 'HTTPS 证书联系邮箱：')
-[[ -n "$DOMAIN" && -n "$EMAIL" ]] || die '域名与邮箱不能为空'
+PORT=${PORT:-$DEFAULT_PORT}; BIND=${BIND:-$DEFAULT_BIND}
 validate_input
 
-printf '\n准备安装流量哨 %s → https://%s\n' "$RELEASE_VERSION" "$DOMAIN"
+printf '\n准备安装流量哨 %s → 监听 %s:%s\n' "$RELEASE_VERSION" "$BIND" "$PORT"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl tar
@@ -113,6 +110,15 @@ fi
 TASK_DIR=$(mktemp -d /tmp/traffic-sentinel-server.XXXXXXXX)
 cleanup() { case "$TASK_DIR" in /tmp/traffic-sentinel-server.*) rm -rf -- "$TASK_DIR";; esac; }
 trap cleanup EXIT
+
+# Fail early, before downloading and building, when another program holds the port.
+# On upgrade the port may legitimately belong to our own running container.
+if command -v ss >/dev/null && ss -Hltn "sport = :$PORT" | grep -q .; then
+  if ! docker port traffic-sentinel-app-1 8080/tcp 2>/dev/null | grep -q ":$PORT\$"; then
+    die "端口 $PORT 已被其他程序占用，请换一个端口重试，例如：--port $((PORT == 65535 ? 18081 : PORT + 1))"
+  fi
+fi
+
 printf '下载 %s 的源码并构建 Docker 镜像（首次构建可能需要数分钟）…\n' "$RELEASE_VERSION"
 curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 --max-time 300 \
   --proto '=https' --tlsv1.2 "https://codeload.github.com/$REPOSITORY/tar.gz/refs/tags/$RELEASE_VERSION" -o "$TASK_DIR/source.tar.gz"
@@ -123,30 +129,47 @@ RELEASE="$BASE/releases/$RELEASE_VERSION-$(date +%Y%m%d%H%M%S)-$$"
 install -d -m 0755 "$BASE" "$BASE/releases" "$RELEASE"
 cp -a "$TASK_DIR/source/." "$RELEASE/"
 if [[ -f "$BASE/.env" ]]; then cp -p "$BASE/.env" "$RELEASE/previous.env"; fi
-printf 'SENTINEL_DOMAIN=%s\nACME_EMAIL=%s\n' "$DOMAIN" "$EMAIL" > "$RELEASE/.env"
+printf 'SENTINEL_BIND=%s\nSENTINEL_PORT=%s\n' "$BIND" "$PORT" > "$RELEASE/.env"
 chmod 600 "$RELEASE/.env"
 cd "$RELEASE"
 docker compose config --quiet
 docker compose build --pull app
-if ! docker compose up -d --wait --wait-timeout 180; then
-  docker compose logs --tail=40 app caddy
+# --remove-orphans also removes the Caddy container left by earlier versions.
+if ! docker compose up -d --wait --wait-timeout 180 --remove-orphans; then
+  docker compose logs --tail=40 app
   die "容器未就绪。配置与日志已保留在 $RELEASE，请检查端口占用和网络后重试 docker compose up -d"
 fi
 cp "$RELEASE/.env" "$BASE/.env"
 ln -s "$RELEASE" "$BASE/current.new"
 mv -Tf "$BASE/current.new" "$BASE/current"
-printf '\n容器已启动。正在检查公网 HTTPS…\n'
-if curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors \
-    --connect-timeout 5 --max-time 10 "https://$DOMAIN/healthz" >/dev/null; then
-  printf 'HTTPS 已连通：https://%s\n' "$DOMAIN"
+
+printf '\n容器已启动。正在检查面板…\n'
+if curl --fail --silent --show-error --noproxy '*' --retry 5 --retry-delay 2 --retry-all-errors \
+    --connect-timeout 5 --max-time 10 "http://127.0.0.1:$PORT/healthz" >/dev/null; then
+  printf '面板已就绪。\n'
 else
-  printf '容器运行正常，但尚未验证公网 HTTPS。请检查域名解析、80/443 防火墙和 Caddy 证书日志。\n'
+  printf '容器运行中，但本机 http://127.0.0.1:%s/healthz 暂未响应，请查看日志。\n' "$PORT"
 fi
-printf '\n打开 https://%s 创建管理员。初始化密钥：\n' "$DOMAIN"
+HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [[ "$BIND" == 0.0.0.0 ]]; then
+  printf '\n访问地址：http://%s:%s （需在防火墙 / 安全组放行 %s 端口）\n' "${HOST_IP:-服务器IP}" "$PORT" "$PORT"
+else
+  printf '\n面板仅监听 %s:%s，请通过反向代理访问。\n' "$BIND" "$PORT"
+fi
+cat <<TEXT
+
+使用 1Panel 反代（推荐，用于 HTTPS 与 Agent 安装）：
+  1. 网站 → 创建网站 → 反向代理，填写你的域名，代理地址填 http://127.0.0.1:$PORT
+  2. 为该网站申请并启用 HTTPS 证书
+  3. 登录面板 → 系统设置 → 主控访问地址，填写 https://你的域名
+  远程 VPS 的 Agent 必须通过 HTTPS 连接主控；只用 IP:端口 时可以查看面板，但无法生成远程安装命令。
+
+TEXT
+printf '创建管理员时需要的初始化密钥：\n'
 if ! docker compose exec -T app cat /data/setup-token.txt 2>/dev/null; then
   printf '已有管理员，无需重新初始化。'
 fi
 printf '\n\n查看状态：cd %s/current && docker compose ps\n' "$BASE"
 printf '查看日志：cd %s/current && docker compose logs --tail=50\n' "$BASE"
-printf '备份：登录面板 → 系统设置 → 导出备份。\n'
+printf '备份：登录面板 → 系统设置 → 下载完整备份。\n'
 printf '安装 VPS Agent：登录面板 → 添加服务器 → 复制专属安装命令。\n'

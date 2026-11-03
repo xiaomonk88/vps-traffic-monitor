@@ -26,11 +26,14 @@ def test_installer_help_is_safe_without_root(bash):
 
 
 @pytest.mark.parametrize("args", [
-    ["--domain"],
+    ["--port"],
     ["--version", "../../main"],
-    ["--domain", "https://example.com"],
-    ["--domain", "example.com\nANOTHER=value"],
-    ["--email", "bad@example.com\nTOKEN=value"],
+    ["--port", "0"],
+    ["--port", "70000"],
+    ["--port", "18080\nANOTHER=value"],
+    ["--bind", "example.com"],
+    ["--bind", "300.0.0.1"],
+    ["--domain", "example.com"],
     ["--unexpected"],
 ])
 def test_installer_rejects_invalid_arguments_before_system_changes(bash, args):

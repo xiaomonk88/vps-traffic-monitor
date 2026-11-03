@@ -1,6 +1,9 @@
 import json
 import time
 from datetime import datetime, timedelta, timezone
+import pytest
+from fastapi.testclient import TestClient
+from sentinel.server import create_app
 
 from sentinel.core import canonical, cycle_at
 from sentinel.accounting import node_view
@@ -124,3 +127,15 @@ def test_secrets_not_returned_and_backup_is_consistent(client, app):
     assert token.encode() not in app.state.store.path.read_bytes()
     backup = client.get("/api/backup")
     assert backup.status_code == 200 and backup.content.startswith(b"PK")
+
+
+@pytest.mark.parametrize("scheme,secure", [("http", False), ("https", True)])
+def test_auto_secure_cookie_follows_request_scheme(tmp_path, monkeypatch, scheme, secure):
+    monkeypatch.setenv("SENTINEL_SECURE_COOKIE", "auto")
+    app = create_app(tmp_path, background=False)
+    with TestClient(app, base_url=f"{scheme}://127.0.0.1") as c:
+        token = (app.state.store.directory / "setup-token.txt").read_text()
+        c.post("/api/setup", json={"username": "admin", "password": "test-only-password-123", "setup_token": token})
+        response = c.post("/api/login", json={"username": "admin", "password": "test-only-password-123"})
+    assert response.status_code == 200
+    assert ("secure" in response.headers["set-cookie"].lower()) is secure

@@ -6,31 +6,40 @@ Python 主控 + Python Agent + Vue 中文面板。先在 Windows 本机试用，
 
 ## 一键安装到 Debian VPS
 
-主控支持 Debian 12 / 13（amd64 / arm64）。先把域名解析到主控 VPS，并确保主控的 80/443 端口可用。以 root 执行：
+主控支持 Debian 12 / 13（amd64 / arm64），以 Docker 单容器运行，通过 `http://服务器IP:端口`（默认 18080）访问，不占用 80/443。HTTPS 与域名请用自己的反向代理（如 1Panel）。以 root 执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main/install.sh | bash
 ```
 
-根据提示填写域名和证书邮箱。安装器会准备 Docker、下载指定发布版本、构建镜像、启动主控和 Caddy，并显示管理员初始化密钥。已有 Docker 时复用，不自动移除已有容器组件。首次构建需要访问 GitHub、Docker 镜像仓库以及 Python/npm 软件源。
+安装器会准备 Docker、下载指定发布版本、构建镜像、启动主控，并显示访问地址和管理员初始化密钥。已有 Docker 时复用，不自动移除已有容器组件。首次构建需要访问 GitHub、Docker 镜像仓库以及 Python/npm 软件源。
 
-也可下载后执行，适合非交互安装：
+指定端口或只允许本机反代访问：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main/install.sh -o install-sentinel-server.sh
-bash install-sentinel-server.sh --domain traffic.example.com --email admin@example.com
+bash install-sentinel-server.sh --port 18080              # 自定义端口
+bash install-sentinel-server.sh --port 18080 --bind 127.0.0.1   # 仅本机反代可访问
 ```
 
-程序目录为 `/opt/traffic-sentinel-server/current`；数据库保存在 Docker 命名卷，升级时保留。访问自己的 HTTPS 域名创建管理员，然后“添加服务器”，复制每台 VPS 专属的 Agent 一键安装命令。受限节点可在面板选择 SOCKS5。
+程序目录为 `/opt/traffic-sentinel-server/current`；数据库保存在 Docker 命名卷，升级时保留。访问面板创建管理员，然后“添加服务器”，复制每台 VPS 专属的 Agent 一键安装命令。受限节点可在面板选择 SOCKS5。
 
 ```bash
 # 查看主控状态
 cd /opt/traffic-sentinel-server/current && docker compose ps
-# 升级主控（复用域名、邮箱和数据卷）
-bash install-sentinel-server.sh --upgrade --version v0.1.3
+# 升级主控（沿用端口设置和数据卷）
+curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main/install.sh | bash -s -- --upgrade
 ```
 
-安装器会检查容器状态并尝试访问公网 HTTPS；证书尚未就绪时明确提示检查解析和防火墙。它不会修改云商家防火墙。更多迁移、备份和手动部署步骤见 [DEPLOY.md](DEPLOY.md)。
+### 使用 1Panel 反代（HTTPS）
+
+1. 网站 → 创建网站 → 反向代理，填写域名，代理地址填 `http://127.0.0.1:18080`。
+2. 为该网站申请并启用 HTTPS 证书。
+3. 登录面板 → 系统设置 → 主控访问地址，填写 `https://你的域名`。
+
+远程 VPS 的 Agent 必须通过 HTTPS 连接主控；只用 `IP:端口` 访问时可以正常查看和管理面板，但生成远程 Agent 安装命令需要先配置 HTTPS 地址。反代请指向 `127.0.0.1` 而非公网 IP，主控只信任本机 / 内网来源的 `X-Forwarded-*` 头。
+
+从带 Caddy 的旧版本（≤ v0.1.3）升级时，安装器会自动移除旧的 Caddy 容器并释放 80/443。安装器不会修改云商家防火墙，直接用 IP 访问时请自行放行端口。更多迁移、备份和手动部署步骤见 [DEPLOY.md](DEPLOY.md)。
 
 ## Windows 本地启动
 

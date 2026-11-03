@@ -28,15 +28,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Compose configuration
         run: docker compose config --quiet
-        env:
-          SENTINEL_DOMAIN: traffic.example.com
-          ACME_EMAIL: admin@example.com
       - name: Check installer on Debian 13 without modifying the host
-        run: docker run --rm -v "$PWD/install.sh:/install.sh:ro" debian:13 bash /install.sh --domain traffic.example.com --email admin@example.com --check
+        run: docker run --rm -v "$PWD/install.sh:/install.sh:ro" debian:13 bash /install.sh --port 18080 --bind 127.0.0.1 --check
       - name: Build frontend, server and Agent image
         run: docker build -t traffic-sentinel:ci .
-      - name: Validate HTTPS gateway configuration
-        run: docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -e SENTINEL_DOMAIN=traffic.example.com -e ACME_EMAIL=admin@example.com caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
       - name: Smoke test the container and its persistent data
         run: python3 scripts/smoke_container.py traffic-sentinel:ci
       - name: Install and upgrade Agent as its real service account

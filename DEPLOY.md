@@ -1,6 +1,6 @@
 # Debian 13 部署与维护
 
-Windows 本机未安装 Docker。GitHub Actions 已通过 Linux Python 3.11/3.13 测试、amd64 镜像构建、Caddy 配置及容器重启持久化检查；记录见仓库 Actions 和 TESTING.md。没有执行用户 VPS 的远程部署。
+Windows 本机未安装 Docker。GitHub Actions 已通过 Linux Python 3.11/3.13 测试、amd64 镜像构建及容器重启持久化检查；记录见仓库 Actions 和 TESTING.md。没有执行用户 VPS 的远程部署。
 
 ## 推荐：一键安装
 
@@ -10,37 +10,36 @@ Windows 本机未安装 Docker。GitHub Actions 已通过 Linux Python 3.11/3.13
 curl -fsSL https://raw.githubusercontent.com/xiaomonk88/vps-traffic-monitor/main/install.sh | bash
 ```
 
-交互填写已解析到本机的域名和证书邮箱，即可准备 Docker、构建并启动主控。使用 `/opt/traffic-sentinel-server/current` 管理服务，`/opt/traffic-sentinel-server/.env` 保存入口参数。程序按版本放入 releases 子目录，数据库使用固定名称的 Compose 数据卷。升级加 `--upgrade`，不删除数据卷。
+无需填写域名，即可准备 Docker、构建并启动主控，面板监听 `0.0.0.0:18080`（`--port` / `--bind` 可修改）。使用 `/opt/traffic-sentinel-server/current` 管理服务，`/opt/traffic-sentinel-server/.env` 保存入口参数。程序按版本放入 releases 子目录，数据库使用固定名称的 Compose 数据卷。升级加 `--upgrade`，不删除数据卷。
 
-安装器当前支持 amd64/arm64；GitHub CI 默认仅验证 amd64 容器。系统安装、真实域名证书和 arm64 仍需目标机实测。若已有容器环境但缺少 Compose，安装器会提示补齐，不擅自卸载冲突组件。
+安装器当前支持 amd64/arm64；GitHub CI 默认仅验证 amd64 容器。系统安装、反向代理和 arm64 仍需目标机实测。若已有容器环境但缺少 Compose，安装器会提示补齐，不擅自卸载冲突组件。
 
 以下是可选的手动部署和维护方法。
 
 ## 1. 准备主控
 
-目标机需要 Docker Engine 和 Compose v2、可达的域名。标准配置由 Caddy 接收 80/443，并反代到内部应用；应用 8080 不对公网发布。域名的 A/AAAA 记录应正确指向主控，证书申请需要相应网络通路。已有反向代理时请调整入口，避免重复占用端口。
+目标机需要 Docker Engine 和 Compose v2。容器把面板发布在 `.env` 中的 `SENTINEL_BIND:SENTINEL_PORT`（默认 `0.0.0.0:18080`），不占用 80/443。HTTPS 与域名由自己的反向代理（1Panel、Nginx 等）提供，代理地址填 `http://127.0.0.1:端口`。远程 Agent 只能通过 HTTPS 连接主控。
 
 官方参考：
 
 - Docker Debian 安装：`https://docs.docker.com/engine/install/debian/`
-- Caddy HTTPS：`https://caddyserver.com/docs/automatic-https`
 - HTTPX SOCKS：`https://www.python-httpx.org/advanced/proxies/`
 
-将 `dist/traffic-sentinel-0.1.3-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
+将 `dist/traffic-sentinel-0.1.4-source.zip` 上传并解压到目标目录，例如 `/opt/traffic-sentinel-server`。在解压后的项目根目录执行：
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 nano .env
-# 填写域名（不含 https://）和证书联系邮箱
+# 按需修改监听地址与端口
 docker compose config --quiet
 docker compose build --pull
 docker compose up -d
 docker compose ps
-docker compose logs --tail=50 app caddy
+docker compose logs --tail=50 app
 ```
 
-读取初始化密钥，在 HTTPS 网页创建管理员：
+读取初始化密钥，在网页创建管理员：
 
 ```bash
 docker compose exec app cat /data/setup-token.txt
@@ -48,7 +47,7 @@ docker compose exec app cat /data/setup-token.txt
 
 初始化成功后此文件自动删除。在“系统设置”将公开地址设为实际的 `https://主控域名`，再生成远程 Agent 安装命令。主控用单个进程运行，内含调度器；不要额外添加多 worker 或多副本。
 
-Docker 构建包含 Vue 前端和 Linux Agent 发布包。Python 运行依赖在 `requirements-lock.txt` 固定，前端使用 `package-lock.json`；基础镜像目前固定版本系列（Python 3.13、Node 24、Caddy 2），未锁定不可变 digest。amd64 镜像已在 GitHub Linux 运行器完成构建与启动验证；arm64 和目标 VPS 的网络、证书环境仍需实测。
+Docker 构建包含 Vue 前端和 Linux Agent 发布包。Python 运行依赖在 `requirements-lock.txt` 固定，前端使用 `package-lock.json`；基础镜像目前固定版本系列（Python 3.13、Node 24），未锁定不可变 digest。amd64 镜像已在 GitHub Linux 运行器完成构建与启动验证；arm64 和目标 VPS 的网络环境仍需实测。
 
 ## 2. Linux Agent
 

@@ -133,6 +133,12 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
         path.unlink(missing_ok=True)
         return {"ok": True}
 
+    def secure_cookie(request: Request):
+        # "auto": Secure only over HTTPS (directly or via a trusted reverse proxy), so that
+        # plain http://IP:port access still works while proxied HTTPS stays protected.
+        mode = os.getenv("SENTINEL_SECURE_COOKIE", "")
+        return mode == "1" or (mode == "auto" and request.url.scheme == "https")
+
     @app.post("/api/login")
     def login(body: Credentials, request: Request, response: Response):
         now = time.time()
@@ -149,7 +155,7 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             db.execute("DELETE FROM sessions WHERE expires<?", (now,))
             db.execute("INSERT INTO sessions VALUES(?,?,?)", (digest(token), csrf, now+86400))
         attempts[key].clear()
-        response.set_cookie("sentinel_session", token, max_age=86400, httponly=True, samesite="strict", secure=os.getenv("SENTINEL_SECURE_COOKIE") == "1")
+        response.set_cookie("sentinel_session", token, max_age=86400, httponly=True, samesite="strict", secure=secure_cookie(request))
         return {"csrf": csrf, "username": body.username}
 
     @app.get("/api/me")

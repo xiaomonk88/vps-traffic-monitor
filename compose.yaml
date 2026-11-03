@@ -1,16 +1,21 @@
 name: traffic-sentinel
+# Single container published on SENTINEL_BIND:SENTINEL_PORT (see .env).
+# HTTPS and the domain are provided by your own reverse proxy (e.g. 1Panel / Nginx).
 services:
   app:
     build: .
-    image: traffic-sentinel:0.1.3
+    image: traffic-sentinel:0.1.4
     restart: unless-stopped
     environment:
-      SENTINEL_SECURE_COOKIE: "1"
-      FORWARDED_ALLOW_IPS: "*"
+      # Secure cookies over HTTPS, plain cookies for direct http://IP:port access.
+      SENTINEL_SECURE_COOKIE: auto
+      # Trust X-Forwarded-* only from loopback / private networks (Docker gateway, local
+      # reverse proxy). Clients reaching the public port directly cannot spoof them.
+      FORWARDED_ALLOW_IPS: "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    ports:
+      - "${SENTINEL_BIND:-0.0.0.0}:${SENTINEL_PORT:-18080}:8080"
     volumes:
       - sentinel_data:/data
-    expose:
-      - "8080"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -23,29 +28,5 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    environment:
-      SENTINEL_DOMAIN: ${SENTINEL_DOMAIN:?请在.env中填写主控域名}
-      ACME_EMAIL: ${ACME_EMAIL:?请在.env中填写证书联系邮箱}
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      app:
-        condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
 volumes:
   sentinel_data:
-  caddy_data:
-  caddy_config:
