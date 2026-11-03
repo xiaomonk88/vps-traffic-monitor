@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RefreshCw, Settings2, SlidersHorizontal, Clock3, Trash2, ShieldOff, Server, ArrowDown, ArrowUp, Network, Terminal, Copy, Check, Bell } from 'lucide-vue-next'
 import ModalShell from './ModalShell.vue'
 import TrafficChart from './TrafficChart.vue'
-import { api, bytes, trafficBytes, dateTime, directions, errorText, statusLabels, units, type Node } from '../api'
+import { api, bytes, trafficBytes, dateTime, directions, errorText, statusLabels, timeLeft, units, type Node } from '../api'
 const props = defineProps<{ id: string }>(); const emit = defineEmits<{ close: []; changed: []; install: [node: { id: string; name: string }] }>()
 const node = ref<Node | null>(null), tab = ref('overview'), error = ref(''), success = ref(''), busy = ref(false), loading = ref(true)
 const profile = reactive({ quota: '' as string | number, unit: 'GB', direction: '', timezone: 'Asia/Shanghai', next_reset: '', reset_day: 1, reset_time: '00:00' })
@@ -79,7 +79,7 @@ watch(switchTarget, () => { switchResult.value = null })
         <div class="detail-stats">
           <div><span><ArrowUp :size="14" />今日上传</span><strong>{{ trafficBytes(node.today.tx,unit) }}</strong></div>
           <div><span><ArrowDown :size="14" />今日下载</span><strong>{{ trafficBytes(node.today.rx,unit) }}</strong></div>
-          <div><span><Clock3 :size="14" />下次重置</span><strong class="date-value">{{ dateTime(node.cycle_end,node.profile?.timezone) }}</strong></div>
+          <div><span><Clock3 :size="14" />下次重置</span><strong class="date-value">{{ dateTime(node.cycle_end,node.profile?.timezone) }}<template v-if="node.cycle_end">（{{ timeLeft(node.cycle_end) }}）</template></strong></div>
         </div>
 
         <section class="card-section">
@@ -109,7 +109,7 @@ watch(switchTarget, () => { switchResult.value = null })
           <label>每周期总额度<input v-model="profile.quota" required type="number" min="0.001" step="any" placeholder="填写套餐额度" /></label>
           <label>流量单位<select v-model="profile.unit"><option v-for="(_,key) in units" :key="key">{{ key }}</option></select></label>
         </div>
-        <label>计费方向<select v-model="profile.direction" required><option disabled value="">请选择商家实际计费方向</option><option value="tx">上传（出站 TX）</option><option value="rx">下载（入站 RX）</option><option value="sum">上传 + 下载</option></select><small>商家写“单向”时，需确认具体方向。</small></label>
+        <label>计费方向<select v-model="profile.direction" required><option disabled value="">请选择商家实际计费方向</option><option value="tx">上传（出站 TX）</option><option value="rx">下载（入站 RX）</option><option value="sum">上传 + 下载</option><option value="max">出入取大（上传、下载取较大者）</option></select><small>商家写“单向”时，需确认具体方向；“出入取大”按本周期上传累计与下载累计中较大的一项计费。</small></label>
         <label>下次重置日期与时间<input v-model="profile.next_reset" required type="datetime-local" @change="resetFields" /></label>
         <div class="form-grid">
           <label>之后每月几号<input v-model="profile.reset_day" required type="number" min="1" max="31" /></label>

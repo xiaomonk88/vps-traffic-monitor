@@ -91,6 +91,9 @@ def portion(amount: int, start: float, end: float, left: float, right: float) ->
 
 
 def metered(rx: int, tx: int, direction: str) -> int:
+    """Billed amount of one span. "max" (出入取大) applies to cycle totals; see accounting.consumed."""
+    if direction == "max":
+        return max(rx, tx)
     return tx if direction == "tx" else rx if direction == "rx" else rx + tx
 
 
@@ -99,7 +102,7 @@ def validate_profile(p: dict) -> dict:
     required = {'quota_bytes', 'unit', 'direction', 'timezone', 'next_reset', 'reset_day', 'reset_time'}
     if not required.issubset(p):
         raise ValueError("计费字段不完整，请填写额度、单位、方向、时区和重置规则")
-    if p.get("unit") not in UNITS or p.get("direction") not in ("rx", "tx", "sum"):
+    if p.get("unit") not in UNITS or p.get("direction") not in ("rx", "tx", "sum", "max"):
         raise ValueError("请选择有效单位和计费方向")
     total = int(p.get("quota_bytes", 0))
     if not 0 < total <= 10**17:

@@ -37,6 +37,26 @@ def usage(db, node_id: str, start: float, end: float, anchor=None) -> dict:
     return {"rx": rx, "tx": tx, "coverage": min(1, (covered+archive_covered) / max(1, end-start)), "uncertain": uncertain}
 
 
+def consumed(db, node_id: str, profile: dict, start: float, until: float, anchor=None) -> tuple[int, dict]:
+    """Billed traffic since the anchor (or cycle start) and the raw measurement after it.
+
+    For "max" (出入取大) the merchant bills max(cycle upload, cycle download), which is not
+    additive. With full data from the cycle start, the increase is computed on cycle totals
+    and applied on top of the calibrated balance. Without it (Agent installed mid-cycle) the
+    pre-calibration split is unknown, so the larger per-direction increase is used: an upper
+    bound that never overstates the remaining quota.
+    """
+    after = usage(db, node_id, anchor["at"] if anchor else start, until, anchor)
+    if profile["direction"] != "max":
+        return metered(after["rx"], after["tx"], profile["direction"]), after
+    if anchor:
+        before = usage(db, node_id, start, anchor["at"])
+        if before["coverage"] >= .95:
+            increase = max(before["rx"]+after["rx"], before["tx"]+after["tx"]) - max(before["rx"], before["tx"])
+            return increase, after
+    return max(after["rx"], after["tx"]), after
+
+
 def node_view(db, node, now=None, report_zone="Asia/Shanghai", offline_seconds=300):
     now = now or time.time()
     n = dict(node)
@@ -60,8 +80,8 @@ def node_view(db, node, now=None, report_zone="Asia/Shanghai", offline_seconds=3
             first_reset = first_reset.replace(tzinfo=ZoneInfo(profile["timezone"]))
         previously_calibrated = db.execute("SELECT 1 FROM calibrations WHERE node_id=? AND created>=? LIMIT 1", (n["id"], profile.get("_updated", 0))).fetchone()
         if anchor or (previously_calibrated and now >= first_reset.timestamp()):
-            measured = usage(db, n["id"], anchor["at"] if anchor else start, min(now, end), anchor)
-            n["remaining"] = (anchor["remaining"] if anchor else profile["quota_bytes"]) - metered(measured["rx"], measured["tx"], profile["direction"])
+            billed, measured = consumed(db, n["id"], profile, start, min(now, end), anchor)
+            n["remaining"] = (anchor["remaining"] if anchor else profile["quota_bytes"]) - billed
             n["used"] = profile["quota_bytes"] - n["remaining"]
             n["percent"] = round(n["used"] / profile["quota_bytes"] * 100, 2)
             n["calibration"] = dict(anchor) if anchor else None

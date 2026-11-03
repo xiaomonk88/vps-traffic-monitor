@@ -1,23 +1,30 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, LayoutDashboard, Bell, BellOff, ScrollText, Settings, LogOut, Plus, Search, RefreshCw, Server, ChevronRight, CircleAlert, Send, ArrowUp, ArrowDown, ArrowUpDown, TriangleAlert } from 'lucide-vue-next'
+import { Activity, LayoutDashboard, Bell, BellOff, ScrollText, Settings, LogOut, Plus, Search, RefreshCw, Server, ChevronRight, CircleAlert, Send, ArrowUp, ArrowDown, ArrowUpDown, TriangleAlert, Gauge } from 'lucide-vue-next'
 import AuthPanel from './components/AuthPanel.vue'
 import AddNodeModal from './components/AddNodeModal.vue'
 import NodeDetail from './components/NodeDetail.vue'
 import SettingsView from './components/SettingsView.vue'
 import EventsView from './components/EventsView.vue'
-import { api, APIError, ago, bytes, trafficBytes, directions, errorText, metered, setCSRF, shortDate, statusLabels, type Node } from './api'
-const ready=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai',channels:0})
+import { api, APIError, ago, bytes, trafficBytes, directions, errorText, metered, setCSRF, shortDate, statusLabels, timeLeft, type Node } from './api'
+const ready=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),group=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai',channels:0})
 let timer:ReturnType<typeof setInterval> | undefined
 const pages=[{id:'overview',name:'流量总览',icon:LayoutDashboard,desc:'集中查看各服务器的剩余额度、计费用量、重置周期与运行状态。'},{id:'notifications',name:'通知设置',icon:Bell,desc:'配置 Telegram 连接、每日报告与即时告警规则。'},{id:'events',name:'事件记录',icon:ScrollText,desc:'追溯系统事件与通知发送结果。'},{id:'system',name:'系统设置',icon:Settings,desc:'管理主控访问地址、数据备份与管理员账户。'}]
 const current=computed(()=>pages.find(v=>v.id===page.value) || pages[0])
 const title=computed(()=>current.value.name)
 const priority:Record<string,number>={error:0,warning:1,offline:2,syncing:3,uncalibrated:4,pending:5,disabled:6,online:7}
-const filtered=computed(()=>nodes.value.filter(n=>(filter.value==='all' || (filter.value==='attention'?['warning','error','offline'].includes(n.status):n.status===filter.value)) && `${n.name} ${n.group_name} ${n.note}`.toLowerCase().includes(search.value.toLowerCase())).sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||a.name.localeCompare(b.name,'zh-CN')))
+const inGroup=(n:Node)=>group.value==='all' || (group.value==='__none__' ? !n.group_name : n.group_name===group.value)
+const filtered=computed(()=>nodes.value.filter(n=>inGroup(n) && (filter.value==='all' || (filter.value==='attention'?['warning','error','offline'].includes(n.status):n.status===filter.value)) && `${n.name} ${n.group_name} ${n.note}`.toLowerCase().includes(search.value.toLowerCase())).sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||a.name.localeCompare(b.name,'zh-CN')))
 const online=computed(()=>nodes.value.filter(n=>n.online&&!n.disabled).length),attention=computed(()=>nodes.value.filter(n=>['warning','error','offline'].includes(n.status)).length),yesterday=computed(()=>nodes.value.reduce((sum,n)=>sum+n.yesterday.tx,0))
 const yesterdayRx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.yesterday.rx,0))
-// Today's traffic across all servers (report timezone, both directions regardless of billing).
-const todayTx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.today.tx,0)),todayRx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.today.rx,0))
+const groups=computed(()=>[...new Set(nodes.value.map(n=>n.group_name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN')))
+const ungrouped=computed(()=>nodes.value.some(n=>!n.group_name))
+// The totals cards describe exactly the servers the list currently shows (group, status, search).
+const scopeLabel=computed(()=>{ const narrowed=filter.value!=='all'||!!search.value.trim(); const name=group.value==='all'?'':group.value==='__none__'?'未分组':`分组 ${group.value}`; return `${narrowed?'筛选结果':name||'全部服务器'} · ${filtered.value.length} 台` })
+// Today's traffic (report timezone, both directions regardless of billing).
+const todayTx=computed(()=>filtered.value.reduce((sum,n)=>sum+n.today.tx,0)),todayRx=computed(()=>filtered.value.reduce((sum,n)=>sum+n.today.rx,0))
+// Quota totals over calibrated servers; uncalibrated ones are counted separately, not guessed.
+const quota=computed(()=>{ let total=0,used=0,remaining=0,counted=0,pending=0; for(const n of filtered.value){ if(!n.profile) continue; if(n.remaining==null||n.used==null){ pending++; continue }; counted++; total+=n.profile.quota_bytes; used+=n.used; remaining+=Math.max(0,n.remaining) } return { total, used, remaining, counted, pending, unset: filtered.value.filter(n=>!n.profile).length, left: total ? Math.max(0,Math.min(100,remaining/total*100)) : 0 } })
 const split=(value:number,unit?:string)=>trafficBytes(value,unit).split(' ')
 const refreshedAt=computed(()=>lastRefresh.value?new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(lastRefresh.value*1000)):'—')
 async function init(){fatal.value='';ready.value=false;try{const status=await api('/status');initialized.value=status.initialized;version.value=status.version;if(status.initialized){try{const me=await api('/me');setCSRF(me.csrf);username.value=me.username;await refresh();await loadTelegram()}catch(e){if(!(e instanceof APIError && e.status===401))throw e}}}catch(e){fatal.value=errorText(e)}finally{ready.value=true}}
@@ -92,19 +99,29 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
 
         <div v-if="page==='overview'" class="overview">
           <section class="kpi-grid">
-            <div class="kpi">
-              <div class="kpi-head"><span>服务器</span><i class="kpi-icon"><Server :size="17" /></i></div>
-              <div class="kpi-value">{{ nodes.length }}<small>台</small></div>
-              <p><b class="dot positive"></b>{{ online }} 台在线<span class="sep">/</span>{{ nodes.length-online }} 台未在线</p>
+            <div class="kpi kpi-wide">
+              <div class="kpi-head"><span>总流量额度 · {{ scopeLabel }}</span><i class="kpi-icon"><Gauge :size="17" /></i></div>
+              <div class="today-split">
+                <div><span>总额度</span><b>{{ split(quota.total)[0] }}<small>{{ split(quota.total)[1] }}</small></b></div>
+                <div><span>已使用</span><b>{{ split(quota.used)[0] }}<small>{{ split(quota.used)[1] }}</small></b></div>
+                <div class="today-total"><span>剩余</span><b :class="{ amber: quota.counted && quota.left<20 }">{{ split(quota.remaining)[0] }}<small>{{ split(quota.remaining)[1] }}</small></b></div>
+              </div>
+              <div class="bar quota-bar"><i :class="{ warn: quota.counted && quota.left<20 }" :style="{ width: `${quota.left}%` }"></i></div>
+              <p>{{ quota.counted ? `剩余 ${quota.left.toFixed(1)}% · 计入 ${quota.counted} 台` : '暂无已校准的服务器' }}<template v-if="quota.pending || quota.unset"> · 未计入：{{ [quota.pending ? `${quota.pending} 台待校准` : '', quota.unset ? `${quota.unset} 台未设额度` : ''].filter(Boolean).join('、') }}</template></p>
             </div>
-            <div class="kpi kpi-today">
-              <div class="kpi-head"><span>今日流量 · 全部服务器</span><i class="kpi-icon"><ArrowUpDown :size="17" /></i></div>
+            <div class="kpi kpi-wide">
+              <div class="kpi-head"><span>今日流量 · {{ scopeLabel }}</span><i class="kpi-icon"><ArrowUpDown :size="17" /></i></div>
               <div class="today-split">
                 <div><span><i class="legend tx"></i>上传</span><b>{{ split(todayTx)[0] }}<small>{{ split(todayTx)[1] }}</small></b></div>
                 <div><span><i class="legend rx"></i>下载</span><b>{{ split(todayRx)[0] }}<small>{{ split(todayRx)[1] }}</small></b></div>
                 <div class="today-total"><span>合计</span><b>{{ split(todayTx+todayRx)[0] }}<small>{{ split(todayTx+todayRx)[1] }}</small></b></div>
               </div>
-              <p>{{ zone }} 今日 0 点起 · 昨日上传 {{ trafficBytes(yesterday) }} / 下载 {{ trafficBytes(yesterdayRx) }}</p>
+              <p>{{ zone }} 今日 0 点起 · 昨日（全部服务器）上传 {{ trafficBytes(yesterday) }} / 下载 {{ trafficBytes(yesterdayRx) }}</p>
+            </div>
+            <div class="kpi">
+              <div class="kpi-head"><span>服务器</span><i class="kpi-icon"><Server :size="17" /></i></div>
+              <div class="kpi-value">{{ nodes.length }}<small>台</small></div>
+              <p><b class="dot positive"></b>{{ online }} 台在线<span class="sep">/</span>{{ nodes.length-online }} 台未在线</p>
             </div>
             <div class="kpi" :class="{ alerting: attention }">
               <div class="kpi-head"><span>需要关注</span><i class="kpi-icon"><TriangleAlert :size="17" /></i></div>
@@ -124,6 +141,11 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
               <h2>服务器列表<span class="count">{{ nodes.length }}</span></h2>
               <div class="list-controls">
                 <label class="search-field"><Search :size="15" /><input v-model="search" aria-label="搜索服务器" placeholder="搜索名称或分组" /></label>
+                <select v-if="groups.length" v-model="group" aria-label="筛选分组">
+                  <option value="all">全部分组</option>
+                  <option v-for="name in groups" :key="name" :value="name">{{ name }}</option>
+                  <option v-if="ungrouped" value="__none__">未分组</option>
+                </select>
                 <select v-model="filter" aria-label="筛选服务器状态">
                   <option value="all">全部状态</option>
                   <option value="attention">需要关注</option>
@@ -147,7 +169,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
             <div v-else-if="!filtered.length" class="empty">
               <div class="empty-icon"><Search :size="26" /></div>
               <h3>没有匹配的服务器</h3>
-              <button class="text-button" @click="search='';filter='all'">清除筛选</button>
+              <button class="text-button" @click="search='';filter='all';group='all'">清除筛选</button>
             </div>
 
             <div v-else class="node-table">
@@ -181,7 +203,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
                 </div>
                 <div class="reset-cell">
                   <span class="mobile-label">下次重置</span>
-                  <strong>{{ shortDate(node.cycle_end,node.profile?.timezone) }}</strong>
+                  <strong>{{ shortDate(node.cycle_end,node.profile?.timezone) }}<template v-if="node.cycle_end">（{{ timeLeft(node.cycle_end) }}）</template></strong>
                   <span v-if="node.profile" class="node-sub">每月 {{ node.profile.reset_day }} 日</span>
                 </div>
                 <div class="state-cell">

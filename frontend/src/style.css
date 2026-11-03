@@ -203,7 +203,11 @@ label small { font-weight: 400 }
 /* ---------- Overview ---------- */
 .overview { display: flex; flex-direction: column; gap: 20px; animation: enter-content .25s ease-out both }
 
-.kpi-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px }
+/* Two wide totals cards on the first row, three status cards on the second. */
+.kpi-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px }
+.kpi-grid > .kpi { grid-column: span 2 }
+.kpi-grid > .kpi-wide { grid-column: span 3 }
+.quota-bar { margin-top: 12px }
 .today-split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 6px }
 .today-split > div { min-width: 0 }
 .today-split span { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted) }
@@ -497,8 +501,6 @@ label small { font-weight: 400 }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1280px) {
-  .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) }
-  .kpi-today { grid-column: 1 / -1; order: -1 }
   .node-table-head, .node-row { grid-template-columns: minmax(140px, 1.1fr) minmax(160px, 1.3fr) minmax(130px, 1fr) minmax(90px, .75fr) minmax(90px, .75fr) minmax(90px, .75fr) 14px; gap: 14px }
   .setting-section { grid-template-columns: 220px minmax(0, 1fr) }
 }
@@ -544,6 +546,11 @@ label small { font-weight: 400 }
   .page-heading .primary { padding: 0 12px }
   .overview { gap: 16px }
   .kpi-grid { grid-template-columns: 1fr 1fr; gap: 10px }
+  .kpi-grid > .kpi { grid-column: auto }
+  .kpi-grid > .kpi-wide { grid-column: 1 / -1 }
+  .list-controls { flex-wrap: wrap }
+  .list-controls .search-field { flex: 1 1 100% }
+  .list-controls select { flex: 1; width: auto }
   .kpi { padding: 14px }
   .kpi-icon { width: 28px; height: 28px }
   .kpi-value { font-size: 23px }
@@ -561,7 +568,7 @@ label small { font-weight: 400 }
   .state-cell { grid-column: 2; grid-row: 1; align-items: flex-end; text-align: right }
   .balance-cell { grid-column: 1 / -1; grid-row: 2 }
   .node-balance { font-size: 22px }
-  .kpi-link { grid-column: 1 / -1 }
+  .kpi-grid > .kpi-link { grid-column: 1 / -1 }
   .today-split b { font-size: 19px }
   .today-cell { grid-column: 1 / -1; grid-row: 3; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 8px 10px; background: var(--surface-2); border-radius: var(--radius) }
   .today-cell .mobile-label { margin-right: auto }
