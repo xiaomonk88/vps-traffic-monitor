@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS nodes (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
  created REAL NOT NULL, credential TEXT, profile TEXT, enrolled REAL,
  heartbeat REAL, last_data REAL, meta TEXT NOT NULL DEFAULT '{}',
- checkpoint_request TEXT, checkpoint TEXT, disabled INTEGER NOT NULL DEFAULT 0
+ checkpoint_request TEXT, checkpoint TEXT, disabled INTEGER NOT NULL DEFAULT 0, position INTEGER
 );
 CREATE TABLE IF NOT EXISTS enrollments (token TEXT PRIMARY KEY, node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE, expires REAL);
 CREATE TABLE IF NOT EXISTS cursors (node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE, epoch TEXT, seq INTEGER NOT NULL DEFAULT 0, last_end REAL NOT NULL DEFAULT 0, PRIMARY KEY(node_id,epoch));
@@ -73,6 +73,10 @@ class Store:
     def migrate(self, db):
         if "channel" not in [r[1] for r in db.execute("PRAGMA table_info(notifications)")]:
             db.execute("ALTER TABLE notifications ADD COLUMN channel TEXT")
+        if "position" not in [r[1] for r in db.execute("PRAGMA table_info(nodes)")]:
+            # Custom list order; existing servers start in the order they were added.
+            db.execute("ALTER TABLE nodes ADD COLUMN position INTEGER")
+            db.execute("UPDATE nodes SET position=(SELECT COUNT(*) FROM nodes AS o WHERE o.created<nodes.created OR (o.created=nodes.created AND o.id<nodes.id))")
         cfg = self.settings(db)
         if "channels" in cfg:
             # v0.1.6 and earlier notified every server; keep that for existing channels.

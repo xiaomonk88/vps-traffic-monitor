@@ -196,17 +196,16 @@ label small { font-weight: 400 }
 /* ---------- Panels ---------- */
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden }
 .panel-head { min-height: 64px; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line-soft) }
-.panel-head h2 { display: flex; align-items: center }
+.panel-head h2 { display: flex; align-items: center; white-space: nowrap; flex-shrink: 0 }
+.node-panel .panel-head { flex-wrap: wrap }
+.node-panel .list-controls { margin-left: auto; flex-wrap: wrap; justify-content: flex-end }
+.nowrap { white-space: nowrap }
 .count { display: inline-grid; place-items: center; min-width: 22px; height: 20px; padding: 0 7px; margin-left: 8px; border-radius: 10px; background: var(--surface-3); color: var(--ink-2); font-size: 12px; font-weight: 500 }
 .panel-foot { display: flex; justify-content: space-between; gap: 16px; padding: 12px 20px; border-top: 1px solid var(--line-soft); background: var(--surface-2); font-size: 12.5px; color: var(--muted) }
 
 /* ---------- Overview ---------- */
 .overview { display: flex; flex-direction: column; gap: 20px; animation: enter-content .25s ease-out both }
 
-/* Two wide totals cards on the first row, three status cards on the second. */
-.kpi-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px }
-.kpi-grid > .kpi { grid-column: span 2 }
-.kpi-grid > .kpi-wide { grid-column: span 3 }
 .quota-bar { margin-top: 12px }
 .today-split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 6px }
 .today-split > div { min-width: 0 }
@@ -227,13 +226,39 @@ label small { font-weight: 400 }
 .kpi-value small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 6px; letter-spacing: 0 }
 .kpi p { font-size: 12.5px; color: var(--muted); margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line-soft); overflow-wrap: anywhere }
 .kpi .sep { margin: 0 6px; color: var(--line-strong) }
-.kpi.alerting .kpi-icon { background: var(--amber-soft); color: var(--amber) }
-.kpi-state { display: flex; align-items: center; min-height: 36px }
-.kpi-state .tag { height: 26px; font-size: 13px }
-.kpi-link { cursor: pointer; font: inherit }
-.kpi-link:hover { border-color: var(--accent-line); box-shadow: 0 4px 14px rgba(42, 120, 214, .08) }
-.kpi-link .kpi-icon { background: var(--accent-soft); color: var(--accent) }
-.kpi-action { position: absolute; right: 18px; top: 62px; display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 500; color: var(--accent) }
+
+/* Dashboard top: quota and today's traffic stacked on the left, ranking on the right. */
+.overview-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px }
+.overview-col { display: flex; flex-direction: column; gap: 16px; min-width: 0 }
+.quota-bar { margin-top: 12px }
+/* The ranking takes the left column's height and scrolls inside instead of growing the row. */
+.rank-card { height: 0; min-height: 100%; overflow: hidden }
+.rank-tabs { display: flex; gap: 2px; padding: 3px; margin-top: 10px; background: var(--surface-3); border-radius: 8px; align-self: flex-start }
+.rank-tabs button { border: 0; background: transparent; padding: 4px 12px; border-radius: 6px; font-size: 12.5px; color: var(--muted); font-weight: 500 }
+.rank-tabs button:hover { color: var(--ink) }
+.rank-tabs button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm) }
+.rank-legend { display: flex; gap: 14px; border: 0 !important; padding: 0 !important; margin-top: 10px !important }
+.rank-legend span { display: inline-flex; align-items: center; gap: 5px }
+.rank-list { list-style: none; margin: 8px -8px 0; padding: 0 2px 0 0; flex: 1; min-height: 0; overflow-y: auto }
+.rank-row { width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 7px 8px; border: 0; background: transparent; border-radius: 8px; text-align: left; color: var(--ink) }
+.rank-row:hover { background: var(--surface-2) }
+.rank-no { flex: 0 0 22px; height: 22px; margin-top: 1px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-3); font-variant-numeric: tabular-nums }
+.rank-no.top1, .rank-no.top2, .rank-no.top3 { color: #fff }
+.rank-no.top1 { background: #2a78d6 }
+.rank-no.top2 { background: #5598e7 }
+.rank-no.top3 { background: #86b6ef }
+.rank-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px }
+.rank-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px }
+.rank-line strong { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.rank-line b { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap }
+.rank-track { display: flex; gap: 2px; height: 8px; border-radius: 4px; background: #eceef2; overflow: hidden }
+.rank-track .seg { display: block; height: 100%; border-radius: 4px; transition: width .35s ease }
+.rank-track .seg.tx { background: var(--tx) }
+.rank-track .seg.rx { background: var(--rx) }
+.rank-track .seg.used { background: var(--accent) }
+.rank-track .seg.warn { background: var(--amber-dot) }
+.rank-detail { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums }
+.rank-empty { margin: auto 0 !important; text-align: center; border: 0 !important; padding: 24px 0 !important }
 
 .list-controls { display: flex; gap: 8px; align-items: center }
 .list-controls select { width: 128px; font-size: 13.5px }
@@ -246,7 +271,7 @@ label small { font-weight: 400 }
 .node-table-head, .node-row { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(190px, 1.35fr) minmax(140px, 1fr) minmax(100px, .75fr) minmax(100px, .75fr) minmax(100px, .75fr) 16px; align-items: center; gap: 20px; padding: 0 20px }
 .node-table-head { height: 42px; background: var(--surface-2); border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 12.5px; font-weight: 500 }
 .node-row { width: 100%; min-height: 84px; padding-top: 14px; padding-bottom: 14px; background: var(--surface); border: 0; border-bottom: 1px solid var(--line-soft); text-align: left; color: var(--ink); position: relative }
-.node-row:last-child { border-bottom: 0 }
+.node-row:last-child, .node-item:last-child > .node-row { border-bottom: 0 }
 .node-row:hover { background: #f8fafd }
 .node-row:hover .row-chevron { color: var(--accent); transform: translateX(2px) }
 .node-row:focus-visible { outline-offset: -2px }
@@ -269,6 +294,18 @@ label small { font-weight: 400 }
 .state-cell { display: flex; flex-direction: column; align-items: flex-start }
 .row-chevron { color: #b3bac4; transition: transform .15s, color .15s }
 .mobile-label { display: none }
+
+/* Custom order: drag handle and drop indicator */
+.node-item { position: relative }
+.node-item:last-child .node-row { border-bottom: 0 }
+.node-table.sortable .node-row, .node-table.sortable .node-table-head { padding-left: 40px }
+.drag-handle { position: absolute; left: 8px; top: 50%; z-index: 2; transform: translateY(-50%); width: 24px; height: 36px; display: grid; place-items: center; border-radius: 6px; color: #b3bac4; cursor: grab; touch-action: none; user-select: none }
+.drag-handle:hover, .drag-handle:focus-visible { color: var(--accent); background: var(--accent-soft) }
+.node-table.dragging, .node-table.dragging * { cursor: grabbing !important; user-select: none }
+.node-item.is-dragged { opacity: .45 }
+.node-item.drop-before::before, .node-item.drop-after::after { content: ''; position: absolute; left: 12px; right: 12px; height: 3px; border-radius: 2px; background: var(--accent); z-index: 3; box-shadow: 0 0 0 3px var(--accent-soft) }
+.node-item.drop-before::before { top: -2px }
+.node-item.drop-after::after { bottom: -2px }
 
 /* Empty states */
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 56px 20px; text-align: center; color: var(--muted) }
@@ -545,17 +582,18 @@ label small { font-weight: 400 }
   .page-heading p { display: none }
   .page-heading .primary { padding: 0 12px }
   .overview { gap: 16px }
-  .kpi-grid { grid-template-columns: 1fr 1fr; gap: 10px }
-  .kpi-grid > .kpi { grid-column: auto }
-  .kpi-grid > .kpi-wide { grid-column: 1 / -1 }
-  .list-controls { flex-wrap: wrap }
-  .list-controls .search-field { flex: 1 1 100% }
-  .list-controls select { flex: 1; width: auto }
+  .overview-top { grid-template-columns: 1fr; gap: 10px }
+  .overview-col { gap: 10px }
+  .rank-card { height: auto; min-height: 0 }
+  .rank-list { max-height: 360px }
+  /* Phone: search on its own row, then the three filters and refresh in one even row. */
+  .node-panel .list-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; margin-left: 0 }
+  .list-controls .search-field { grid-column: 1 / -1 }
+  .node-panel .list-controls select { width: 100%; min-width: 0; font-size: 13px; padding-left: 8px; padding-right: 22px; background-position: right 5px center }
   .kpi { padding: 14px }
   .kpi-icon { width: 28px; height: 28px }
   .kpi-value { font-size: 23px }
   .kpi p { font-size: 12px }
-  .kpi-action { position: static; margin-top: 8px }
   .panel-head { flex-wrap: wrap; gap: 12px; padding: 14px 16px }
   .list-controls { width: 100% }
   .search-field { flex: 1; min-width: 0 }
@@ -563,12 +601,13 @@ label small { font-weight: 400 }
   .list-controls select { width: 112px }
   .node-table-head { display: none }
   .node-row { grid-template-columns: 1fr 1fr; gap: 14px; padding: 16px; min-height: 0 }
+  .node-table.sortable .node-row { padding-left: 40px }
+  .drag-handle { top: 28px; transform: none }
   .node-identity { grid-column: 1; grid-row: 1 }
   .node-symbol { width: 32px; height: 32px }
   .state-cell { grid-column: 2; grid-row: 1; align-items: flex-end; text-align: right }
   .balance-cell { grid-column: 1 / -1; grid-row: 2 }
   .node-balance { font-size: 22px }
-  .kpi-grid > .kpi-link { grid-column: 1 / -1 }
   .today-split b { font-size: 19px }
   .today-cell { grid-column: 1 / -1; grid-row: 3; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 8px 10px; background: var(--surface-2); border-radius: var(--radius) }
   .today-cell .mobile-label { margin-right: auto }
@@ -626,7 +665,6 @@ label small { font-weight: 400 }
 @media (max-width: 420px) {
   .form-grid { grid-template-columns: 1fr }
   .form-grid > div:empty { display: none }
-  .kpi-grid { grid-template-columns: 1fr 1fr }
   .today-split { gap: 8px }
   .today-split b { font-size: 16px }
   .today-total { padding-left: 8px }

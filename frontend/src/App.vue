@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, LayoutDashboard, Bell, BellOff, ScrollText, Settings, LogOut, Plus, Search, RefreshCw, Server, ChevronRight, CircleAlert, Send, ArrowUp, ArrowDown, ArrowUpDown, TriangleAlert, Gauge } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { Activity, LayoutDashboard, Bell, BellOff, ScrollText, Settings, LogOut, Plus, Search, RefreshCw, Server, ChevronRight, CircleAlert, Send, ArrowUp, ArrowDown, ArrowUpDown, TriangleAlert, Gauge, GripVertical } from 'lucide-vue-next'
 import AuthPanel from './components/AuthPanel.vue'
 import AddNodeModal from './components/AddNodeModal.vue'
 import NodeDetail from './components/NodeDetail.vue'
 import SettingsView from './components/SettingsView.vue'
+import TrafficRank from './components/TrafficRank.vue'
 import EventsView from './components/EventsView.vue'
 import { api, APIError, ago, bytes, trafficBytes, directions, errorText, metered, setCSRF, shortDate, statusLabels, timeLeft, type Node } from './api'
 const ready=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),group=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai',channels:0})
@@ -14,7 +15,14 @@ const current=computed(()=>pages.find(v=>v.id===page.value) || pages[0])
 const title=computed(()=>current.value.name)
 const priority:Record<string,number>={error:0,warning:1,offline:2,syncing:3,uncalibrated:4,pending:5,disabled:6,online:7}
 const inGroup=(n:Node)=>group.value==='all' || (group.value==='__none__' ? !n.group_name : n.group_name===group.value)
-const filtered=computed(()=>nodes.value.filter(n=>inGroup(n) && (filter.value==='all' || (filter.value==='attention'?['warning','error','offline'].includes(n.status):n.status===filter.value)) && `${n.name} ${n.group_name} ${n.note}`.toLowerCase().includes(search.value.toLowerCase())).sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||a.name.localeCompare(b.name,'zh-CN')))
+// List order: custom (drag-and-drop, saved on the server), risk, name or creation time.
+const sortModes:Record<string,string>={custom:'拖拽排序',risk:'风险优先',name:'名称排序',created:'添加时间'}
+const sortMode=ref(sortModes[localStorage.getItem('sentinel-sort') || ''] ? localStorage.getItem('sentinel-sort')! : 'custom')
+watch(sortMode,value=>localStorage.setItem('sentinel-sort',value))
+const byName=(a:Node,b:Node)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true})
+const byCustom=(a:Node,b:Node)=>(a.position??1e9)-(b.position??1e9)||a.created-b.created
+function compare(a:Node,b:Node){ if(sortMode.value==='risk') return (priority[a.status]??9)-(priority[b.status]??9)||byName(a,b); if(sortMode.value==='name') return byName(a,b); if(sortMode.value==='created') return a.created-b.created||byName(a,b); return byCustom(a,b) }
+const filtered=computed(()=>nodes.value.filter(n=>inGroup(n) && (filter.value==='all' || (filter.value==='attention'?['warning','error','offline'].includes(n.status):n.status===filter.value)) && `${n.name} ${n.group_name} ${n.note}`.toLowerCase().includes(search.value.toLowerCase())).sort(compare))
 const online=computed(()=>nodes.value.filter(n=>n.online&&!n.disabled).length),attention=computed(()=>nodes.value.filter(n=>['warning','error','offline'].includes(n.status)).length),yesterday=computed(()=>nodes.value.reduce((sum,n)=>sum+n.yesterday.tx,0))
 const yesterdayRx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.yesterday.rx,0))
 const groups=computed(()=>[...new Set(nodes.value.map(n=>n.group_name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN')))
@@ -27,6 +35,23 @@ const todayTx=computed(()=>filtered.value.reduce((sum,n)=>sum+n.today.tx,0)),tod
 const quota=computed(()=>{ let total=0,used=0,remaining=0,counted=0,pending=0; for(const n of filtered.value){ if(!n.profile) continue; if(n.remaining==null||n.used==null){ pending++; continue }; counted++; total+=n.profile.quota_bytes; used+=n.used; remaining+=Math.max(0,n.remaining) } return { total, used, remaining, counted, pending, unset: filtered.value.filter(n=>!n.profile).length, left: total ? Math.max(0,Math.min(100,remaining/total*100)) : 0 } })
 const split=(value:number,unit?:string)=>trafficBytes(value,unit).split(' ')
 const refreshedAt=computed(()=>lastRefresh.value?new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(lastRefresh.value*1000)):'—')
+const drag=reactive({ id:'', over:'', after:false })
+async function reorder(id:string,target:string,after:boolean){
+  const order=[...nodes.value].sort(byCustom).map(n=>n.id).filter(v=>v!==id)
+  order.splice(order.indexOf(target)+(after?1:0),0,id)
+  order.forEach((v,i)=>{ const n=nodes.value.find(x=>x.id===v); if(n) n.position=i })
+  try { await api('/nodes/order','PUT',{ ids:order }) } catch(e) { error.value=errorText(e); await refresh() }
+}
+function dragMove(e:PointerEvent){
+  if(e.clientY<70) window.scrollBy(0,-14); else if(e.clientY>innerHeight-70) window.scrollBy(0,14)
+  const row=document.elementFromPoint(e.clientX,e.clientY)?.closest<HTMLElement>('[data-node-id]')
+  if(!row || row.dataset.nodeId===drag.id){ drag.over=''; return }
+  const box=row.getBoundingClientRect(); drag.over=row.dataset.nodeId!; drag.after=e.clientY>box.top+box.height/2
+}
+async function dragEnd(){ window.removeEventListener('pointermove',dragMove); const { id, over, after }=drag; drag.id=''; drag.over=''; if(id && over) await reorder(id,over,after) }
+function dragStart(e:PointerEvent,id:string){ if(e.button!==0) return; drag.id=id; drag.over=''; window.addEventListener('pointermove',dragMove); window.addEventListener('pointerup',dragEnd,{ once:true }); window.addEventListener('pointercancel',dragEnd,{ once:true }) }
+// Keyboard alternative: ↑ / ↓ on the focused handle moves the server among the visible rows.
+async function nudge(id:string,step:number,el:HTMLElement){ const list=filtered.value, i=list.findIndex(n=>n.id===id), target=list[i+step]; if(!target) return; await reorder(id,target.id,step>0); requestAnimationFrame(()=>el.focus()) }
 async function init(){fatal.value='';ready.value=false;try{const status=await api('/status');initialized.value=status.initialized;version.value=status.version;if(status.initialized){try{const me=await api('/me');setCSRF(me.csrf);username.value=me.username;await refresh();await loadTelegram()}catch(e){if(!(e instanceof APIError && e.status===401))throw e}}}catch(e){fatal.value=errorText(e)}finally{ready.value=true}}
 async function refresh(){if(busy.value||!username.value)return;busy.value=true;try{const data=await api<{nodes:Node[];timezone:string}>('/nodes');nodes.value=data.nodes;zone.value=data.timezone;lastRefresh.value=Date.now()/1000;error.value=''}catch(e){error.value=errorText(e)}finally{busy.value=false}}
 async function loadTelegram(){try{const data=await api('/settings');telegram.value={enabled:data.telegram_enabled,time:data.daily_time,zone:data.timezone,channels:data.channels.filter((c:{enabled:boolean})=>c.enabled).length}}catch{/* Settings page surfaces its own error. */}}
@@ -98,42 +123,29 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
         <div v-if="error" class="alert error" role="alert">{{ error }}</div>
 
         <div v-if="page==='overview'" class="overview">
-          <section class="kpi-grid">
-            <div class="kpi kpi-wide">
-              <div class="kpi-head"><span>总流量额度 · {{ scopeLabel }}</span><i class="kpi-icon"><Gauge :size="17" /></i></div>
-              <div class="today-split">
-                <div><span>总额度</span><b>{{ split(quota.total)[0] }}<small>{{ split(quota.total)[1] }}</small></b></div>
-                <div><span>已使用</span><b>{{ split(quota.used)[0] }}<small>{{ split(quota.used)[1] }}</small></b></div>
-                <div class="today-total"><span>剩余</span><b :class="{ amber: quota.counted && quota.left<20 }">{{ split(quota.remaining)[0] }}<small>{{ split(quota.remaining)[1] }}</small></b></div>
+          <section class="overview-top">
+            <div class="overview-col">
+              <div class="kpi">
+                <div class="kpi-head"><span>总流量额度 · {{ scopeLabel }}</span><i class="kpi-icon"><Gauge :size="17" /></i></div>
+                <div class="today-split">
+                  <div><span>总额度</span><b>{{ split(quota.total)[0] }}<small>{{ split(quota.total)[1] }}</small></b></div>
+                  <div><span>已使用</span><b>{{ split(quota.used)[0] }}<small>{{ split(quota.used)[1] }}</small></b></div>
+                  <div class="today-total"><span>剩余</span><b :class="{ amber: quota.counted && quota.left<20 }">{{ split(quota.remaining)[0] }}<small>{{ split(quota.remaining)[1] }}</small></b></div>
+                </div>
+                <div class="bar quota-bar"><i :class="{ warn: quota.counted && quota.left<20 }" :style="{ width: `${quota.left}%` }"></i></div>
+                <p>{{ quota.counted ? `剩余 ${quota.left.toFixed(1)}% · 计入 ${quota.counted} 台` : '暂无已校准的服务器' }}<template v-if="quota.pending || quota.unset"> · 未计入：{{ [quota.pending ? `${quota.pending} 台待校准` : '', quota.unset ? `${quota.unset} 台未设额度` : ''].filter(Boolean).join('、') }}</template></p>
               </div>
-              <div class="bar quota-bar"><i :class="{ warn: quota.counted && quota.left<20 }" :style="{ width: `${quota.left}%` }"></i></div>
-              <p>{{ quota.counted ? `剩余 ${quota.left.toFixed(1)}% · 计入 ${quota.counted} 台` : '暂无已校准的服务器' }}<template v-if="quota.pending || quota.unset"> · 未计入：{{ [quota.pending ? `${quota.pending} 台待校准` : '', quota.unset ? `${quota.unset} 台未设额度` : ''].filter(Boolean).join('、') }}</template></p>
-            </div>
-            <div class="kpi kpi-wide">
-              <div class="kpi-head"><span>今日流量 · {{ scopeLabel }}</span><i class="kpi-icon"><ArrowUpDown :size="17" /></i></div>
-              <div class="today-split">
-                <div><span><i class="legend tx"></i>上传</span><b>{{ split(todayTx)[0] }}<small>{{ split(todayTx)[1] }}</small></b></div>
-                <div><span><i class="legend rx"></i>下载</span><b>{{ split(todayRx)[0] }}<small>{{ split(todayRx)[1] }}</small></b></div>
-                <div class="today-total"><span>合计</span><b>{{ split(todayTx+todayRx)[0] }}<small>{{ split(todayTx+todayRx)[1] }}</small></b></div>
+              <div class="kpi">
+                <div class="kpi-head"><span>今日流量 · {{ scopeLabel }}</span><i class="kpi-icon"><ArrowUpDown :size="17" /></i></div>
+                <div class="today-split">
+                  <div><span><i class="legend tx"></i>上传</span><b>{{ split(todayTx)[0] }}<small>{{ split(todayTx)[1] }}</small></b></div>
+                  <div><span><i class="legend rx"></i>下载</span><b>{{ split(todayRx)[0] }}<small>{{ split(todayRx)[1] }}</small></b></div>
+                  <div class="today-total"><span>合计</span><b>{{ split(todayTx+todayRx)[0] }}<small>{{ split(todayTx+todayRx)[1] }}</small></b></div>
+                </div>
+                <p>{{ zone }} 今日 0 点起 · 昨日（全部服务器）上传 {{ trafficBytes(yesterday) }} / 下载 {{ trafficBytes(yesterdayRx) }}</p>
               </div>
-              <p>{{ zone }} 今日 0 点起 · 昨日（全部服务器）上传 {{ trafficBytes(yesterday) }} / 下载 {{ trafficBytes(yesterdayRx) }}</p>
             </div>
-            <div class="kpi">
-              <div class="kpi-head"><span>服务器</span><i class="kpi-icon"><Server :size="17" /></i></div>
-              <div class="kpi-value">{{ nodes.length }}<small>台</small></div>
-              <p><b class="dot positive"></b>{{ online }} 台在线<span class="sep">/</span>{{ nodes.length-online }} 台未在线</p>
-            </div>
-            <div class="kpi" :class="{ alerting: attention }">
-              <div class="kpi-head"><span>需要关注</span><i class="kpi-icon"><TriangleAlert :size="17" /></i></div>
-              <div class="kpi-value" :class="{ amber: attention }">{{ attention }}<small>台</small></div>
-              <p>{{ attention ? '额度偏低、离线或采集异常' : '当前没有额度或离线告警' }}</p>
-            </div>
-            <button class="kpi kpi-link" @click="page='notifications'">
-              <div class="kpi-head"><span>Telegram 日报与告警</span><i class="kpi-icon"><Send :size="16" /></i></div>
-              <div class="kpi-value kpi-state"><span class="tag" :class="{ positive: telegram.enabled }">{{ telegram.enabled ? '已启用' : '未启用' }}</span></div>
-              <p>{{ telegram.enabled ? `${telegram.channels} 个渠道 · 每天 ${telegram.time} · ${telegram.zone}` : '尚未启用，配置后接收流量与重置提醒。' }}</p>
-              <span class="kpi-action">{{ telegram.enabled ? '查看配置' : '配置通知' }}<ChevronRight :size="15" /></span>
-            </button>
+            <TrafficRank :nodes="filtered" :scope="scopeLabel" @open="detailId=$event" />
           </section>
 
           <section class="panel node-panel">
@@ -145,6 +157,9 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
                   <option value="all">全部分组</option>
                   <option v-for="name in groups" :key="name" :value="name">{{ name }}</option>
                   <option v-if="ungrouped" value="__none__">未分组</option>
+                </select>
+                <select v-model="sortMode" aria-label="排序方式" title="排序方式">
+                  <option v-for="(label,key) in sortModes" :key="key" :value="key">{{ label }}</option>
                 </select>
                 <select v-model="filter" aria-label="筛选服务器状态">
                   <option value="all">全部状态</option>
@@ -172,9 +187,11 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
               <button class="text-button" @click="search='';filter='all';group='all'">清除筛选</button>
             </div>
 
-            <div v-else class="node-table">
+            <div v-else class="node-table" :class="{ sortable: sortMode==='custom', dragging: drag.id }">
               <div class="node-table-head"><span>服务器</span><span>预计剩余 / 总额度</span><span>今日流量</span><span>昨日计费量</span><span>下次重置</span><span>状态</span><span></span></div>
-              <button v-for="node in filtered" :key="node.id" class="node-row" :class="{ risk: node.status==='warning', unavailable: ['offline','error'].includes(node.status) }" @click="detailId=node.id">
+              <div v-for="node in filtered" :key="node.id" class="node-item" :data-node-id="node.id" :class="{ 'is-dragged': drag.id===node.id, 'drop-before': drag.over===node.id && !drag.after, 'drop-after': drag.over===node.id && drag.after }">
+              <span v-if="sortMode==='custom'" class="drag-handle" role="button" tabindex="0" :aria-label="`拖动排序：${node.name}（可用上下方向键移动）`" title="拖动排序" @pointerdown.prevent="dragStart($event,node.id)" @keydown.up.prevent="nudge(node.id,-1,$event.currentTarget as HTMLElement)" @keydown.down.prevent="nudge(node.id,1,$event.currentTarget as HTMLElement)"><GripVertical :size="16" /></span>
+              <button class="node-row" :class="{ risk: node.status==='warning', unavailable: ['offline','error'].includes(node.status) }" @click="detailId=node.id">
                 <div class="node-identity">
                   <span class="node-symbol"><Server :size="18" :stroke-width="1.6" /></span>
                   <div>
@@ -203,7 +220,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
                 </div>
                 <div class="reset-cell">
                   <span class="mobile-label">下次重置</span>
-                  <strong>{{ shortDate(node.cycle_end,node.profile?.timezone) }}<template v-if="node.cycle_end">（{{ timeLeft(node.cycle_end) }}）</template></strong>
+                  <strong><span class="nowrap">{{ shortDate(node.cycle_end,node.profile?.timezone) }}</span><span v-if="node.cycle_end" class="nowrap">（{{ timeLeft(node.cycle_end) }}）</span></strong>
                   <span v-if="node.profile" class="node-sub">每月 {{ node.profile.reset_day }} 日</span>
                 </div>
                 <div class="state-cell">
@@ -212,10 +229,11 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
                 </div>
                 <ChevronRight class="row-chevron" :size="16" />
               </button>
+              </div>
             </div>
 
             <div class="panel-foot">
-              <span>风险优先排序 · 每 15 秒刷新</span>
+              <span>{{ sortMode==='custom' ? '拖拽排序 · 拖动左侧手柄调整顺序' : sortModes[sortMode] }} · 每 15 秒刷新</span>
               <span>最后刷新 {{ refreshedAt }}</span>
             </div>
           </section>

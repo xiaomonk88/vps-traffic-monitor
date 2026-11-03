@@ -4,7 +4,7 @@ name: traffic-sentinel
 services:
   app:
     build: .
-    image: traffic-sentinel:0.1.9
+    image: traffic-sentinel:0.1.10
     restart: unless-stopped
     environment:
       # Secure cookies over HTTPS, plain cookies for direct http://IP:port access.

@@ -201,9 +201,24 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
     def add_node(body: NodeInput):
         node_id = uid()
         with store.connect() as db:
-            db.execute("INSERT INTO nodes(id,name,group_name,note,created) VALUES(?,?,?,?,?)", (node_id, body.name.strip(), body.group_name, body.note, time.time()))
+            db.execute("INSERT INTO nodes(id,name,group_name,note,created,position) VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM nodes))", (node_id, body.name.strip(), body.group_name, body.note, time.time()))
             store.event(db, node_id, "created", f"添加服务器：{body.name}")
         return {"id": node_id}
+
+    @app.put("/api/nodes/order", dependencies=[Depends(admin)])
+    def node_order(body: dict):
+        """Save the custom list order. Unknown ids are ignored; servers missing from the
+        request keep their relative order after the listed ones."""
+        ids = body.get("ids")
+        if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+            raise ValueError("排序列表格式无效")
+        with store.connect() as db:
+            existing = [r[0] for r in db.execute("SELECT id FROM nodes ORDER BY position IS NULL, position, created")]
+            known = set(existing)
+            listed = [i for i in dict.fromkeys(ids) if i in known]
+            order = listed + [i for i in existing if i not in set(listed)]
+            db.executemany("UPDATE nodes SET position=? WHERE id=?", list(enumerate(order)))
+        return {"ok": True}
 
     @app.put("/api/nodes/{node_id}", dependencies=[Depends(admin)])
     def edit_node(node_id: str, body: NodeInput):
