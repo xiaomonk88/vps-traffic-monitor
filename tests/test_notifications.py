@@ -9,7 +9,7 @@ from conftest import report, sample
 
 
 def add_channel(client, name="主账号", chat="99", **flags):
-    response = client.post("/api/telegram/channels", json={"name": name, "bot_token": "123456:fake-for-test", "chat_id": chat, **flags})
+    response = client.post("/api/telegram/channels", json={"name": name, "bot_token": "123456:fake-for-test", "chat_id": chat, "all_nodes": True, **flags})
     assert response.status_code == 200, response.text
     return response.json()["id"]
 

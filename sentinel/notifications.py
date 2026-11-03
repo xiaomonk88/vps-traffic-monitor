@@ -16,12 +16,14 @@ class Scheduler:
         self.store = store
         self.transport = transport
 
-    def daily_text(self, now):
+    def daily_text(self, now, node_ids=None):
+        """Daily report; `node_ids` limits it to the servers assigned to one channel."""
         cfg = self.store.settings()
         local = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"]))
         lines = ["📊 流量哨 · VPS 流量日报", f"统计日：{(local.date()-timedelta(days=1)).isoformat()}（{cfg['timezone']}）", "余额为本地估算，以各节点最近上报为准。", ""]
         with self.store.connect() as db:
-            nodes = [node_view(db, r, now, cfg["timezone"], cfg["offline_minutes"]*60) for r in db.execute("SELECT * FROM nodes WHERE disabled=0").fetchall()]
+            nodes = [node_view(db, r, now, cfg["timezone"], cfg["offline_minutes"]*60) for r in db.execute("SELECT * FROM nodes WHERE disabled=0").fetchall()
+                     if node_ids is None or r["id"] in node_ids]
         nodes.sort(key=lambda n: (n["status"] == "online", -(n["percent"] or 0)))
         if not nodes:
             lines.append("暂无已添加的服务器。")
@@ -53,9 +55,18 @@ class Scheduler:
         cfg = self.store.settings()
         date = datetime.fromtimestamp(now, ZoneInfo(cfg["timezone"])).date().isoformat()
         key = "manual-daily:"+uid() if manual else "daily:"+date
-        text = self.daily_text(now)
-        with self.store.connect() as db:
-            return self.store.enqueue(db, key, text, now, kind="daily")
+        ids = []
+        # Each channel gets a report of only its own servers; channels without servers get none.
+        for channel in cfg.get("channels", []):
+            if not channel.get("enabled") or not channel.get("daily"):
+                continue
+            node_ids = None if channel.get("all_nodes") else set(channel.get("nodes", []))
+            if node_ids is not None and not node_ids:
+                continue
+            text = self.daily_text(now, node_ids)
+            with self.store.connect() as db:
+                ids += self.store.enqueue(db, key, text, now, kind="daily", channel=channel["id"])
+        return ids
 
     def tick(self, now=None):
         now = now or time.time()
@@ -72,14 +83,14 @@ class Scheduler:
                 state = db.execute("SELECT * FROM node_alert_state WHERE node_id=?", (n["id"],)).fetchone()
                 offline = not n["online"] and now-(n["heartbeat"] or n["enrolled"]) >= cfg["offline_minutes"]*60
                 if offline and (not state or not state["offline"]):
-                    self.store.enqueue(db, f"offline:{n['id']}:{int(n['heartbeat'] or n['enrolled'])}", f"🔴 {n['name']} 已超过 {cfg['offline_minutes']} 分钟未上报。\n本地余额可能偏高，请检查 Agent 或代理连接。", now)
+                    self.store.enqueue(db, f"offline:{n['id']}:{int(n['heartbeat'] or n['enrolled'])}", f"🔴 {n['name']} 已超过 {cfg['offline_minutes']} 分钟未上报。\n本地余额可能偏高，请检查 Agent 或代理连接。", now, node=n["id"])
                 if not offline and n["online"] and state and state["offline"]:
-                    self.store.enqueue(db, f"recovered:{n['id']}:{int(n['heartbeat'])}", f"🟢 {n['name']} 已恢复连接。断线期间数据将继续补报。", now)
+                    self.store.enqueue(db, f"recovered:{n['id']}:{int(n['heartbeat'])}", f"🟢 {n['name']} 已恢复连接。断线期间数据将继续补报。", now, node=n["id"])
                 end = n["cycle_end"]
                 if end and state and state["cycle_end"] and state["cycle_end"] != end and cfg["reset_notice"]:
-                    self.store.enqueue(db, f"reset:{n['id']}:{end}", f"🔄 {n['name']} 已按设置进入新计费周期。\n这是本地规则推算，尚未核对商家后台。", now)
+                    self.store.enqueue(db, f"reset:{n['id']}:{end}", f"🔄 {n['name']} 已按设置进入新计费周期。\n这是本地规则推算，尚未核对商家后台。", now, node=n["id"])
                 if end and 0 < end-now <= 86400 and cfg["pre_reset_notice"]:
-                    self.store.enqueue(db, f"before-reset:{n['id']}:{end}", f"📅 {n['name']} 距配置的流量重置时间不足 24 小时。", now)
+                    self.store.enqueue(db, f"before-reset:{n['id']}:{end}", f"📅 {n['name']} 距配置的流量重置时间不足 24 小时。", now, node=n["id"])
                 db.execute("INSERT INTO node_alert_state VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET offline=excluded.offline,cycle_end=excluded.cycle_end", (n["id"], int(offline), end))
                 if n["fresh"] and n["percent"] is not None:
                     exceeded = [t for t in cfg["thresholds"] if n["percent"] >= t]
@@ -89,11 +100,11 @@ class Scheduler:
                         # Mark lower tiers as suppressed when jumping over several thresholds.
                         for lower in exceeded[:-1]:
                             db.execute("INSERT OR IGNORE INTO notifications(id,dedupe,created,due,text,state) VALUES(?,?,?,?,?,'suppressed')", (uid(), f"quota:{n['id']}:{end}:{lower}:0", now, now, "已合并到更高等级告警"))
-                        self.store.enqueue(db, key, f"⚠️ {n['name']} 流量已用约 {n['percent']:.1f}%\n预计剩余：{human_bytes(n['remaining'],n['profile']['unit'])}\n请及时检查，余额为本地估算。", now)
+                        self.store.enqueue(db, key, f"⚠️ {n['name']} 流量已用约 {n['percent']:.1f}%\n预计剩余：{human_bytes(n['remaining'],n['profile']['unit'])}\n请及时检查，余额为本地估算。", now, node=n["id"])
                 if cfg["forecast_enabled"] and n["exhaustion_risk"]:
-                    self.store.enqueue(db, f"forecast:{n['id']}:{local.date()}", f"⚠️ {n['name']} 按近期消耗预计还能使用 {n['forecast_days']:.1f} 天，可能在重置前用完。", now)
+                    self.store.enqueue(db, f"forecast:{n['id']}:{local.date()}", f"⚠️ {n['name']} 按近期消耗预计还能使用 {n['forecast_days']:.1f} 天，可能在重置前用完。", now, node=n["id"])
                 if n["meta"].get("error"):
-                    self.store.enqueue(db, f"agent-error:{n['id']}:{local.date()}", f"⚠️ {n['name']} 采集异常：{n['meta']['error']}", now)
+                    self.store.enqueue(db, f"agent-error:{n['id']}:{local.date()}", f"⚠️ {n['name']} 采集异常：{n['meta']['error']}", now, node=n["id"])
             db.execute("UPDATE notifications SET state='expired',error='超过24小时未发送' WHERE state IN ('pending','retry') AND created<?", (now-86400,))
         self.deliver(now)
 

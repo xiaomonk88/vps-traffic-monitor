@@ -194,6 +194,7 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             names = proxy_names(db)
         for node in result:
             node["proxy_name"] = names.get(node["meta"].get("proxy_endpoint", ""), "")
+            node["notify_channels"] = [c["name"] for c in settings["channels"] if notifies(c, node["id"])]
         return {"nodes": result, "now": time.time(), "timezone": settings["timezone"]}
 
     @app.post("/api/nodes", dependencies=[Depends(admin)])
@@ -217,6 +218,11 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             node = get_node(db, node_id)
             db.execute("DELETE FROM nodes WHERE id=?", (node_id,))
             db.execute("DELETE FROM node_alert_state WHERE node_id=?", (node_id,))
+            cfg = store.settings(db)
+            for channel in cfg["channels"]:
+                if node_id in channel.get("nodes", []):
+                    channel["nodes"].remove(node_id)
+            db.execute("UPDATE settings SET value=? WHERE key='general'", (canonical(cfg),))
             store.event(db, None, "deleted", f"删除服务器及统计：{node['name']}")
         return {"ok": True}
 
@@ -237,6 +243,8 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             node["history"] = history(db, node_id, settings["timezone"])
             node["calibrations"] = [dict(r) for r in db.execute("SELECT * FROM calibrations WHERE node_id=? ORDER BY created DESC LIMIT 20", (node_id,))]
             node["proxy_name"] = proxy_names(db).get(node["meta"].get("proxy_endpoint", ""), "")
+            node["channels"] = [{"id": c["id"], "name": c["name"], "enabled": c["enabled"], "all_nodes": bool(c.get("all_nodes")),
+                                 "assigned": store.covers(c, node_id)} for c in settings["channels"]]
         return node
 
     def proxy_names(db):
@@ -392,10 +400,13 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
 
     MAX_CHANNELS = 20
 
+    def notifies(channel, node_id):
+        return channel.get("enabled") and (channel.get("daily") or channel.get("alerts")) and store.covers(channel, node_id)
+
     def channel_view(channel):
         return {**channel, "token_configured": bool(store.secret("telegram_token:"+channel["id"]))}
 
-    def channel_input(body: dict, current: dict | None = None):
+    def channel_input(body: dict, db, current: dict | None = None):
         channel = dict(current or {})
         name = str(body.get("name", channel.get("name", ""))).strip()
         chat = str(body.get("chat_id", channel.get("chat_id", ""))).strip()
@@ -404,11 +415,16 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
         if not chat or len(chat) > 100 or any(ch.isspace() for ch in chat):
             raise ValueError("请填写有效的 Chat ID")
         channel.update(name=name, chat_id=chat)
-        for flag in ("enabled", "daily", "alerts"):
-            value = body.get(flag, channel.get(flag, True))
+        for flag in ("enabled", "daily", "alerts", "all_nodes"):
+            value = body.get(flag, channel.get(flag, flag != "all_nodes"))
             if not isinstance(value, bool):
                 raise ValueError("开关设置必须是布尔值")
             channel[flag] = value
+        nodes = body.get("nodes", channel.get("nodes", []))
+        if not isinstance(nodes, list) or any(not isinstance(i, str) for i in nodes):
+            raise ValueError("服务器列表格式无效")
+        known = {r[0] for r in db.execute("SELECT id FROM nodes")}
+        channel["nodes"] = [i for i in dict.fromkeys(nodes) if i in known]
         token = str(body.get("bot_token", "")).strip()
         if token and (len(token) > 200 or ":" not in token or "/" in token or " " in token):
             raise ValueError("Bot Token 格式无效")
@@ -466,7 +482,7 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             cfg = store.settings(db)
             if len(cfg["channels"]) >= MAX_CHANNELS:
                 raise ValueError(f"最多添加 {MAX_CHANNELS} 个通知渠道")
-            channel, token = channel_input(body)
+            channel, token = channel_input(body, db)
             if not token:
                 raise ValueError("请填写 Bot Token")
             channel["id"] = uid()
@@ -482,7 +498,7 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
             index = next((i for i, c in enumerate(cfg["channels"]) if c["id"] == channel_id), None)
             if index is None:
                 raise HTTPException(404, "通知渠道不存在")
-            channel, token = channel_input(body, cfg["channels"][index])
+            channel, token = channel_input(body, db, cfg["channels"][index])
             if token:
                 store.set_secret("telegram_token:"+channel_id, token, db)
             cfg["channels"][index] = channel
@@ -490,6 +506,25 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
                 raise ValueError("Telegram 通知已启用，至少保留一个启用的渠道；或先关闭 Telegram 通知")
             save_settings(db, cfg, f"已更新 Telegram 通知渠道：{channel['name']}")
         return channel_view(channel)
+
+    @app.put("/api/nodes/{node_id}/channels", dependencies=[Depends(admin)])
+    def node_channels(node_id: str, body: dict):
+        wanted = body.get("channels", [])
+        if not isinstance(wanted, list):
+            raise ValueError("通知渠道列表格式无效")
+        with store.connect() as db:
+            node = get_node(db, node_id)
+            cfg = store.settings(db)
+            for channel in cfg["channels"]:
+                if channel.get("all_nodes"):
+                    continue  # already covers every server
+                nodes = channel.setdefault("nodes", [])
+                if channel["id"] in wanted and node_id not in nodes:
+                    nodes.append(node_id)
+                elif channel["id"] not in wanted and node_id in nodes:
+                    nodes.remove(node_id)
+            save_settings(db, cfg, f"已更新 {node['name']} 的 Telegram 通知渠道")
+        return {"ok": True}
 
     @app.delete("/api/telegram/channels/{channel_id}", dependencies=[Depends(admin)])
     def channel_delete(channel_id: str):

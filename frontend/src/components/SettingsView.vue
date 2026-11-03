@@ -3,13 +3,14 @@ import { onMounted, reactive, ref } from 'vue'
 import { Download, Eye, Send, ShieldCheck, Save, Plus, Pencil, Trash2, MessageCircle, Network, Activity } from 'lucide-vue-next'
 import { api, errorText } from '../api'
 import ModalShell from './ModalShell.vue'
-interface Channel { id: string; name: string; chat_id: string; enabled: boolean; daily: boolean; alerts: boolean; token_configured: boolean }
+interface Channel { id: string; name: string; chat_id: string; enabled: boolean; daily: boolean; alerts: boolean; token_configured: boolean; all_nodes: boolean; nodes: string[] }
 interface AgentProxy { id: string; host: string; port: number; username: string; has_password: boolean; note: string; endpoint: string; nodes: string[] }
 const props = defineProps<{ section: 'notifications' | 'system' }>(); const emit = defineEmits<{ passwordChanged: []; saved: [] }>()
 const form = reactive<any>({ timezone:'Asia/Shanghai',daily_time:'09:00',daily_enabled:true,telegram_enabled:false,channels:[] as Channel[],thresholds:[80,90,95],offline_minutes:5,forecast_enabled:true,reset_notice:true,pre_reset_notice:true,public_url:'',proxy_url:'',clear_proxy:false,proxy_configured:false })
 const thresholds = ref('80, 90, 95'), error = ref(''), success = ref(''), busy = ref(false), loading = ref(true), preview = ref<string | null>(null)
 const password = reactive({ old:'',new:'',confirm:'' })
-const blankChannel = () => ({ id:'', name:'', chat_id:'', bot_token:'', enabled:true, daily:true, alerts:true, token_configured:false })
+const blankChannel = () => ({ id:'', name:'', chat_id:'', bot_token:'', enabled:true, daily:true, alerts:true, token_configured:false, all_nodes:false, nodes:[] as string[] })
+const nodeOptions = ref<{ id: string; name: string }[]>([])
 const channel = reactive(blankChannel()), channelOpen = ref(false), channelError = ref(''), removing = ref<Channel | null>(null), acting = ref('')
 async function load() { try { const cfg = await api('/settings'); Object.assign(form,cfg); thresholds.value = cfg.thresholds.join(', ') } catch(e) { error.value = errorText(e) } finally { loading.value = false } }
 async function save() { busy.value = true; error.value='';success.value=''; try { const levels=thresholds.value.split(/[,，\s]+/).filter(Boolean).map(Number); if (!levels.length || levels.some(n=>!Number.isFinite(n)||n<1||n>100)) throw new Error('请输入 1～100 之间的告警百分比，以逗号分隔。'); await api('/settings','PUT',{...form,thresholds:levels}); form.proxy_url='';form.clear_proxy=false;await load();success.value='设置已保存。';emit('saved') } catch(e) { error.value=errorText(e) } finally { busy.value=false } }
@@ -19,8 +20,9 @@ async function backup() { error.value='';busy.value=true;try{const response=awai
 
 // Channels are saved immediately through their own API; the rest of the form keeps its unsaved edits.
 async function reloadChannels() { form.channels = (await api('/settings')).channels; emit('saved') }
-function openChannel(item?: Channel) { Object.assign(channel, blankChannel(), item || {}, { bot_token: '' }); channelError.value = ''; channelOpen.value = true }
-async function saveChannel() { channelError.value=''; busy.value=true; try { const body={ name:channel.name, chat_id:channel.chat_id, bot_token:channel.bot_token, enabled:channel.enabled, daily:channel.daily, alerts:channel.alerts }; if(channel.id) await api(`/telegram/channels/${channel.id}`,'PUT',body); else await api('/telegram/channels','POST',body); channelOpen.value=false; await reloadChannels(); error.value=''; success.value=`通知渠道“${body.name}”已保存。` } catch(e) { channelError.value=errorText(e) } finally { busy.value=false } }
+async function openChannel(item?: Channel) { Object.assign(channel, blankChannel(), item || {}, { bot_token: '', nodes: [...(item?.nodes || [])] }); channelError.value = ''; channelOpen.value = true; try { nodeOptions.value = (await api('/nodes')).nodes.map((n: any) => ({ id: n.id, name: n.name })) } catch (e) { channelError.value = errorText(e) } }
+const scopeText = (item: Channel) => item.all_nodes ? '全部服务器' : item.nodes.length ? `${item.nodes.length} 台服务器` : ''
+async function saveChannel() { channelError.value=''; busy.value=true; try { const body={ name:channel.name, chat_id:channel.chat_id, bot_token:channel.bot_token, enabled:channel.enabled, daily:channel.daily, alerts:channel.alerts, all_nodes:channel.all_nodes, nodes:channel.nodes }; if(channel.id) await api(`/telegram/channels/${channel.id}`,'PUT',body); else await api('/telegram/channels','POST',body); channelOpen.value=false; await reloadChannels(); error.value=''; success.value=`通知渠道“${body.name}”已保存。` } catch(e) { channelError.value=errorText(e) } finally { busy.value=false } }
 async function channelAction(item: Channel, work: () => Promise<void>) { acting.value=item.id; error.value=''; success.value=''; try { await work() } catch(e) { error.value=errorText(e) } finally { acting.value='' } }
 const toggleChannel = (item: Channel) => channelAction(item, async () => { await api(`/telegram/channels/${item.id}`,'PUT',{ enabled:!item.enabled }); await reloadChannels() })
 const testChannel = (item: Channel) => channelAction(item, async () => { const result=await api('/telegram/test','POST',{ channel:item.id }); if(result.state==='sent') success.value=`测试消息已发送到“${item.name}”。`; else error.value=`“${item.name}”测试失败：${result.results[0]?.error || '已进入重试队列'}` })
@@ -69,7 +71,7 @@ onMounted(() => { load(); if (props.section === 'system') loadProxies() })
                 </label>
                 <div class="channel-main">
                   <strong>{{ item.name }}</strong>
-                  <span>Chat ID {{ item.chat_id }}<template v-if="!item.token_configured"> · <em>缺少 Token</em></template></span>
+                  <span>Chat ID {{ item.chat_id }}<template v-if="!item.token_configured"> · <em>缺少 Token</em></template> · <template v-if="scopeText(item)">{{ scopeText(item) }}</template><em v-else>未分配服务器，不会收到通知</em></span>
                 </div>
                 <div class="channel-kinds">
                   <span class="kind" :class="{ on: item.daily }">日报</span>
@@ -209,6 +211,17 @@ onMounted(() => { load(); if (props.section === 'system') loadProxies() })
         <label>渠道名称<input v-model="channel.name" required maxlength="40" placeholder="例如：个人、运维群" /></label>
         <label>Bot Token<input v-model="channel.bot_token" type="password" autocomplete="new-password" maxlength="200" :required="!channel.token_configured" :placeholder="channel.token_configured ? '已保存，留空保持原值' : '填写 BotFather 提供的 Token'" /><small>已保存的 Token 不会回显。多个渠道可以共用同一个 Bot。</small></label>
         <label>Chat ID<input v-model="channel.chat_id" required maxlength="100" placeholder="个人或群组 Chat ID" /><small>先与 Bot 开始对话，或将其加入目标群组。</small></label>
+        <fieldset class="node-pick">
+          <legend>通知哪些服务器</legend>
+          <label class="check-label"><input v-model="channel.all_nodes" type="checkbox" />全部服务器（包括以后新增的）</label>
+          <template v-if="!channel.all_nodes">
+            <div v-if="nodeOptions.length" class="node-pick-list">
+              <label v-for="item in nodeOptions" :key="item.id" class="check-label"><input v-model="channel.nodes" type="checkbox" :value="item.id" />{{ item.name }}</label>
+            </div>
+            <p v-else class="hint">还没有服务器。</p>
+            <p class="hint">未勾选的服务器不会通过此渠道发送告警，日报也只包含勾选的服务器。</p>
+          </template>
+        </fieldset>
         <div class="check-group">
           <label class="check-label"><input v-model="channel.daily" type="checkbox" />接收每日报告</label>
           <label class="check-label"><input v-model="channel.alerts" type="checkbox" />接收即时告警（额度、离线、重置）</label>

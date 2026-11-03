@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, LayoutDashboard, Bell, ScrollText, Settings, LogOut, Plus, Search, RefreshCw, Server, ChevronRight, CircleAlert, Send, ArrowUpFromLine, TriangleAlert } from 'lucide-vue-next'
+import { Activity, LayoutDashboard, Bell, BellOff, ScrollText, Settings, LogOut, Plus, Search, RefreshCw, Server, ChevronRight, CircleAlert, Send, ArrowUp, ArrowDown, ArrowUpDown, TriangleAlert } from 'lucide-vue-next'
 import AuthPanel from './components/AuthPanel.vue'
 import AddNodeModal from './components/AddNodeModal.vue'
 import NodeDetail from './components/NodeDetail.vue'
@@ -15,7 +15,10 @@ const title=computed(()=>current.value.name)
 const priority:Record<string,number>={error:0,warning:1,offline:2,syncing:3,uncalibrated:4,pending:5,disabled:6,online:7}
 const filtered=computed(()=>nodes.value.filter(n=>(filter.value==='all' || (filter.value==='attention'?['warning','error','offline'].includes(n.status):n.status===filter.value)) && `${n.name} ${n.group_name} ${n.note}`.toLowerCase().includes(search.value.toLowerCase())).sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||a.name.localeCompare(b.name,'zh-CN')))
 const online=computed(()=>nodes.value.filter(n=>n.online&&!n.disabled).length),attention=computed(()=>nodes.value.filter(n=>['warning','error','offline'].includes(n.status)).length),yesterday=computed(()=>nodes.value.reduce((sum,n)=>sum+n.yesterday.tx,0))
-const yesterdayParts=computed(()=>trafficBytes(yesterday.value).split(' '))
+const yesterdayRx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.yesterday.rx,0))
+// Today's traffic across all servers (report timezone, both directions regardless of billing).
+const todayTx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.today.tx,0)),todayRx=computed(()=>nodes.value.reduce((sum,n)=>sum+n.today.rx,0))
+const split=(value:number,unit?:string)=>trafficBytes(value,unit).split(' ')
 const refreshedAt=computed(()=>lastRefresh.value?new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(lastRefresh.value*1000)):'—')
 async function init(){fatal.value='';ready.value=false;try{const status=await api('/status');initialized.value=status.initialized;version.value=status.version;if(status.initialized){try{const me=await api('/me');setCSRF(me.csrf);username.value=me.username;await refresh();await loadTelegram()}catch(e){if(!(e instanceof APIError && e.status===401))throw e}}}catch(e){fatal.value=errorText(e)}finally{ready.value=true}}
 async function refresh(){if(busy.value||!username.value)return;busy.value=true;try{const data=await api<{nodes:Node[];timezone:string}>('/nodes');nodes.value=data.nodes;zone.value=data.timezone;lastRefresh.value=Date.now()/1000;error.value=''}catch(e){error.value=errorText(e)}finally{busy.value=false}}
@@ -94,10 +97,14 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
               <div class="kpi-value">{{ nodes.length }}<small>台</small></div>
               <p><b class="dot positive"></b>{{ online }} 台在线<span class="sep">/</span>{{ nodes.length-online }} 台未在线</p>
             </div>
-            <div class="kpi">
-              <div class="kpi-head"><span>昨日上传总量</span><i class="kpi-icon"><ArrowUpFromLine :size="17" /></i></div>
-              <div class="kpi-value">{{ yesterdayParts[0] }}<small>{{ yesterdayParts[1] }}</small></div>
-              <p>{{ zone }} · 按实际采集统计</p>
+            <div class="kpi kpi-today">
+              <div class="kpi-head"><span>今日流量 · 全部服务器</span><i class="kpi-icon"><ArrowUpDown :size="17" /></i></div>
+              <div class="today-split">
+                <div><span><i class="legend tx"></i>上传</span><b>{{ split(todayTx)[0] }}<small>{{ split(todayTx)[1] }}</small></b></div>
+                <div><span><i class="legend rx"></i>下载</span><b>{{ split(todayRx)[0] }}<small>{{ split(todayRx)[1] }}</small></b></div>
+                <div class="today-total"><span>合计</span><b>{{ split(todayTx+todayRx)[0] }}<small>{{ split(todayTx+todayRx)[1] }}</small></b></div>
+              </div>
+              <p>{{ zone }} 今日 0 点起 · 昨日上传 {{ trafficBytes(yesterday) }} / 下载 {{ trafficBytes(yesterdayRx) }}</p>
             </div>
             <div class="kpi" :class="{ alerting: attention }">
               <div class="kpi-head"><span>需要关注</span><i class="kpi-icon"><TriangleAlert :size="17" /></i></div>
@@ -144,12 +151,12 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
             </div>
 
             <div v-else class="node-table">
-              <div class="node-table-head"><span>服务器</span><span>预计剩余 / 总额度</span><span>昨日计费量</span><span>下次重置</span><span>状态</span><span></span></div>
+              <div class="node-table-head"><span>服务器</span><span>预计剩余 / 总额度</span><span>今日流量</span><span>昨日计费量</span><span>下次重置</span><span>状态</span><span></span></div>
               <button v-for="node in filtered" :key="node.id" class="node-row" :class="{ risk: node.status==='warning', unavailable: ['offline','error'].includes(node.status) }" @click="detailId=node.id">
                 <div class="node-identity">
                   <span class="node-symbol"><Server :size="18" :stroke-width="1.6" /></span>
                   <div>
-                    <strong>{{ node.name }}</strong>
+                    <strong>{{ node.name }}<span v-if="telegram.enabled && !node.notify_channels?.length" class="mute-flag" title="未分配 Telegram 通知渠道，不会收到通知"><BellOff :size="13" /></span></strong>
                     <span class="node-sub">{{ node.group_name || (node.profile ? directions[node.profile.direction] : '计费待配置') }} · {{ node.meta.connection==='socks5' ? `SOCKS5${node.proxy_name ? ' · ' + node.proxy_name : ''}` : '直连' }}</span>
                   </div>
                 </div>
@@ -158,6 +165,14 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
                   <span v-else class="muted">{{ node.profile ? '等待校准余额' : '尚未设置额度' }}</span>
                   <div v-if="node.percent!=null" class="bar"><i :class="{ warn: node.percent>=80, stale: !node.fresh }" :style="{ width: `${Math.max(0,Math.min(100,100-node.percent))}%` }"></i></div>
                   <span class="node-sub" :class="{ amber: node.exhaustion_risk }">{{ node.exhaustion_risk ? '预计无法撑到重置日' : node.enrolled && !node.fresh ? '数据过期或补报中' : node.percent!=null ? `剩余 ${Math.max(0,100-node.percent).toFixed(1)}%` : '点击配置与校准' }}</span>
+                </div>
+                <div class="today-cell">
+                  <span class="mobile-label">今日流量</span>
+                  <template v-if="node.enrolled">
+                    <strong>{{ trafficBytes(node.today.tx+node.today.rx, node.profile?.unit) }}</strong>
+                    <span class="today-dir"><span><ArrowUp :size="12" class="up" />{{ trafficBytes(node.today.tx, node.profile?.unit) }}</span><span><ArrowDown :size="12" class="down" />{{ trafficBytes(node.today.rx, node.profile?.unit) }}</span></span>
+                  </template>
+                  <strong v-else>—</strong>
                 </div>
                 <div class="yesterday-cell">
                   <span class="mobile-label">昨日计费量</span>

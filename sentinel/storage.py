@@ -75,11 +75,17 @@ class Store:
             db.execute("ALTER TABLE notifications ADD COLUMN channel TEXT")
         cfg = self.settings(db)
         if "channels" in cfg:
+            # v0.1.6 and earlier notified every server; keep that for existing channels.
+            missing = [c for c in cfg["channels"] if "all_nodes" not in c]
+            for c in missing:
+                c.update(all_nodes=True, nodes=[])
+            if missing:
+                db.execute("UPDATE settings SET value=? WHERE key='general'", (canonical(cfg),))
             return
         token, chat = self.secret("telegram_token", db), str(cfg.pop("chat_id", "")).strip()
         cfg["channels"] = []
         if token or chat:
-            cfg["channels"].append({"id": self.LEGACY_CHANNEL, "name": "默认", "chat_id": chat, "enabled": True, "daily": True, "alerts": True})
+            cfg["channels"].append({"id": self.LEGACY_CHANNEL, "name": "默认", "chat_id": chat, "enabled": True, "daily": True, "alerts": True, "all_nodes": True, "nodes": []})
             if token:
                 self.set_secret("telegram_token:"+self.LEGACY_CHANNEL, token, db)
             db.execute("UPDATE notifications SET channel=? WHERE channel IS NULL", (self.LEGACY_CHANNEL,))
@@ -130,15 +136,22 @@ class Store:
     def event(self, db, node_id, kind, message, now=None):
         db.execute("INSERT INTO events VALUES (?,?,?,?,?)", (uid(), node_id, now or time.time(), kind, message))
 
-    def enqueue(self, db, key, text, now=None, kind="alert", channel=None):
+    @staticmethod
+    def covers(channel, node_id):
+        """Whether a channel is assigned to a server; unassigned servers are not notified."""
+        return bool(channel.get("all_nodes")) or node_id in channel.get("nodes", [])
+
+    def enqueue(self, db, key, text, now=None, kind="alert", channel=None, node=None):
         """Queue one copy per receiving channel; returns the inserted row ids.
 
-        kind is "daily", "alert" or "test". A named channel is targeted even when it is
-        switched off, so an administrator can test it before enabling.
+        kind is "daily", "alert" or "test". `node` limits delivery to channels assigned to
+        that server. A named channel is targeted even when it is switched off, so an
+        administrator can test it before enabling.
         """
         now = now or time.time()
         targets = [c for c in self.settings(db).get("channels", [])
-                   if (c["id"] == channel if channel else c.get("enabled") and (kind == "test" or c.get("daily" if kind == "daily" else "alerts")))]
+                   if (c["id"] == channel if channel else c.get("enabled") and (kind == "test" or c.get("daily" if kind == "daily" else "alerts"))
+                       and (node is None or self.covers(c, node)))]
         # UTF-16 units are conservatively bounded below the Telegram message limit.
         chunks, current = [], ""
         for line in text.splitlines(keepends=True):

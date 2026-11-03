@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { RefreshCw, Settings2, SlidersHorizontal, Clock3, Trash2, ShieldOff, Server, ArrowDown, ArrowUp, Network, Terminal, Copy, Check } from 'lucide-vue-next'
+import { RefreshCw, Settings2, SlidersHorizontal, Clock3, Trash2, ShieldOff, Server, ArrowDown, ArrowUp, Network, Terminal, Copy, Check, Bell } from 'lucide-vue-next'
 import ModalShell from './ModalShell.vue'
 import TrafficChart from './TrafficChart.vue'
 import { api, bytes, trafficBytes, dateTime, directions, errorText, statusLabels, units, type Node } from '../api'
@@ -30,6 +30,11 @@ async function loadSwitchOptions() { try { switchOptions.value = (await api('/ag
 async function makeSwitch() { error.value = ''; switchResult.value = null; try { switchResult.value = await api(`/nodes/${props.id}/switch-proxy`, 'POST', { proxy_id: switchTarget.value }) } catch (e) { error.value = errorText(e) } }
 async function copySwitch() { try { await navigator.clipboard.writeText(switchCommand.value); switchCopied.value = true; setTimeout(() => switchCopied.value = false, 1800) } catch { error.value = '浏览器不允许复制，请选中命令后手动复制。' } }
 watch(tab, value => { if (value === 'manage' && !switchLoaded.value) loadSwitchOptions() })
+
+// Telegram channels that notify this server; channels set to "all servers" always do.
+const notifyPick = ref<string[]>([]), notifyDirty = ref(false)
+watch(() => node.value?.channels, channels => { if (!notifyDirty.value) notifyPick.value = (channels || []).filter(c => c.assigned && !c.all_nodes).map(c => c.id) }, { immediate: true })
+async function saveNotify() { await action(async () => { await api(`/nodes/${props.id}/channels`, 'PUT', { channels: notifyPick.value }); notifyDirty.value = false }, '通知渠道已保存。') }
 watch(switchTarget, () => { switchResult.value = null })
 </script>
 
@@ -153,6 +158,19 @@ watch(switchTarget, () => { switchResult.value = null })
           </div>
           <div class="form-actions"><button class="secondary" :disabled="busy">保存服务器信息</button></div>
         </form>
+        <section class="card-section switch-proxy">
+          <div class="section-heading"><h3><Bell :size="16" />Telegram 通知</h3><span class="muted">{{ node.channels?.some(c => c.assigned && c.enabled) ? '已分配' : '未分配，不会收到通知' }}</span></div>
+          <p class="hint">勾选后，这台服务器的告警会发送到该渠道，日报中也会包含它。未分配任何渠道的服务器不发送通知。</p>
+          <div v-if="node.channels?.length" class="node-pick-list">
+            <label v-for="c in node.channels" :key="c.id" class="check-label">
+              <input type="checkbox" :value="c.id" :checked="c.all_nodes || notifyPick.includes(c.id)" :disabled="c.all_nodes" @change="notifyDirty = true; notifyPick = ($event.target as HTMLInputElement).checked ? [...notifyPick, c.id] : notifyPick.filter(id => id !== c.id)" />
+              {{ c.name }}<small v-if="c.all_nodes">（全部服务器）</small><small v-if="!c.enabled">（已停用）</small>
+            </label>
+          </div>
+          <p v-else class="hint">还没有通知渠道，可在“通知设置”添加。</p>
+          <div v-if="node.channels?.length" class="form-actions"><button type="button" class="secondary" :disabled="busy || !notifyDirty" @click="saveNotify">保存通知渠道</button></div>
+        </section>
+
         <section v-if="node.enrolled && !node.disabled" class="card-section switch-proxy">
           <div class="section-heading"><h3><Network :size="16" />更换 Agent 代理</h3><span class="muted">当前：{{ currentConnection }}</span></div>
           <p class="hint">代理失效时 Agent 无法连上主控，面板无法远程下发新设置，需要 SSH 登录这台 VPS 执行下方命令。命令会经新线路下载最新 Agent，<strong>先测试能否连上主控，失败则保持原配置不变</strong>，成功后切换并重启服务；统计数据和注册身份保留。</p>
