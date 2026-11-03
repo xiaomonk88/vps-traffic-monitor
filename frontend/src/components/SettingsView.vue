@@ -128,7 +128,7 @@ onMounted(load)
             <div><h2>主控访问地址</h2><p class="muted">生成 Agent 安装命令时使用。部署到 VPS 后应填写目标机器能访问的完整地址。</p></div>
           </header>
           <div class="setting-body">
-            <label>公开地址<input v-model="form.public_url" type="url" placeholder="留空使用当前访问地址" /><small>本地测试可使用 http://127.0.0.1:8080；远程部署建议使用 HTTPS。</small></label>
+            <label>公开地址<input v-model="form.public_url" type="url" placeholder="留空使用当前访问地址" /><small>填写反向代理后的 HTTPS 域名，例如 https://traffic.example.com（可使用 Cloudflare 代理）。远程 Agent 只能通过 HTTPS 连接，不能填 http://IP:端口；仅本机测试可用 http://127.0.0.1。</small></label>
             <div class="form-actions"><button class="primary" :disabled="busy">保存主控地址</button></div>
           </div>
         </form>

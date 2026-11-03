@@ -139,3 +139,10 @@ def test_auto_secure_cookie_follows_request_scheme(tmp_path, monkeypatch, scheme
         response = c.post("/api/login", json={"username": "admin", "password": "test-only-password-123"})
     assert response.status_code == 200
     assert ("secure" in response.headers["set-cookie"].lower()) is secure
+
+
+def test_installer_and_agent_package_are_not_cacheable(client):
+    for path in ("/install.sh", "/downloads/SHA256SUMS", "/downloads/sentinel-agent.zip"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["cache-control"] == "no-store", path

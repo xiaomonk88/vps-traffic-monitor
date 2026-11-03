@@ -74,7 +74,9 @@ def create_app(data_dir=None, background=True, telegram_transport=None):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
-        if request.url.path.startswith("/api/"):
+        # Installer and Agent package must never be served stale by a CDN (e.g. Cloudflare
+        # caches .zip by default), or the package would mismatch a fresh SHA256SUMS.
+        if request.url.path.startswith(("/api/", "/downloads/")) or request.url.path == "/install.sh":
             response.headers["Cache-Control"] = "no-store"
         return response
 
