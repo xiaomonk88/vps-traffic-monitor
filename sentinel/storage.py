@@ -77,6 +77,8 @@ class Store:
             # Custom list order; existing servers start in the order they were added.
             db.execute("ALTER TABLE nodes ADD COLUMN position INTEGER")
             db.execute("UPDATE nodes SET position=(SELECT COUNT(*) FROM nodes AS o WHERE o.created<nodes.created OR (o.created=nodes.created AND o.id<nodes.id))")
+        # Forecast alerts are no longer sent; drop any still waiting in the queue.
+        db.execute("UPDATE notifications SET state='suppressed',error='预测提醒已停用' WHERE dedupe LIKE 'forecast:%' AND state IN ('pending','retry','sending')")
         cfg = self.settings(db)
         if "channels" in cfg:
             # v0.1.6 and earlier notified every server; keep that for existing channels.

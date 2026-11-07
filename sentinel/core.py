@@ -143,14 +143,14 @@ def traffic_bytes(value: int | float, unit: str = "GB") -> str:
 
 
 def time_left(seconds: float) -> str:
-    """"还剩 16 天 22 小时" style countdown."""
+    """Compact countdown: "7天19小时", "7天", "5小时", "不足1小时"."""
     if seconds <= 0:
         return "已到期"
     days, rest = divmod(int(seconds), 86400)
     hours = rest // 3600
     if days:
-        return f"还剩 {days} 天 {hours} 小时" if hours else f"还剩 {days} 天"
-    return f"还剩 {hours} 小时" if hours else "不足 1 小时"
+        return f"{days}天{hours}小时" if hours else f"{days}天"
+    return f"{hours}小时" if hours else "不足1小时"
 
 
 def finite_timestamp(value: float) -> bool:

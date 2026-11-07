@@ -119,7 +119,6 @@ onMounted(() => { load(); if (props.section === 'system') loadProxies() })
               <label>离线判定（分钟）<input v-model="form.offline_minutes" required type="number" min="1" max="1440" /></label>
             </div>
             <div class="check-group">
-              <label class="check-label"><input v-model="form.forecast_enabled" type="checkbox" />预计无法撑到重置日时提醒</label>
               <label class="check-label"><input v-model="form.pre_reset_notice" type="checkbox" />距离重置不足 24 小时提醒</label>
               <label class="check-label"><input v-model="form.reset_notice" type="checkbox" />按配置进入新周期时提醒</label>
             </div>

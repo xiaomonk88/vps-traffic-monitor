@@ -689,3 +689,5 @@ label small { font-weight: 400 }
 .node-pick-list .check-label { font-size: 13.5px; overflow-wrap: anywhere }
 .node-pick-list small { color: var(--muted); margin-left: 2px }
 .mute-flag { display: inline-flex; vertical-align: -1px; margin-left: 6px; color: var(--amber) }
+
+.loading svg { vertical-align: -3px; margin-right: 6px }

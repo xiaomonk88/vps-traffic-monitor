@@ -28,7 +28,7 @@ class Scheduler:
         lines = ["📊 流量哨 · VPS 流量日报", f"统计时段：{local:%Y-%m-%d} 00:00 – {local:%H:%M}"]
         if nodes:
             lines.append(f"今日合计（{len(nodes)} 台）：上传 {traffic_bytes(tx)} / 下载 {traffic_bytes(rx)} / 总计 {traffic_bytes(tx+rx)}")
-        lines += ["余额为本地估算，以各节点最近上报为准。", ""]
+        lines.append("")
         if not nodes:
             lines.append("暂无已添加的服务器。")
         for n in nodes:
@@ -45,14 +45,6 @@ class Scheduler:
                 # Shown in the billing timezone, matching the reset time the user configured.
                 reset = datetime.fromtimestamp(n["cycle_end"], ZoneInfo(n["profile"]["timezone"])).strftime("%Y-%m-%d %H:%M")
                 lines.append(f"下次重置：{reset}（{time_left(n['cycle_end']-now)}）")
-            if not n["fresh"]:
-                lines.append("⚠️ 数据过期或尚未追平，余额可能偏高")
-            if n["forecast_days"] is not None:
-                lines.append(f"按近期消耗预计可用：{n['forecast_days']:.1f} 天")
-            if n["exhaustion_risk"]:
-                lines.append("⚠️ 预计无法撑到重置日")
-            if n["last_data"]:
-                lines.append("最近采集："+datetime.fromtimestamp(n["last_data"], ZoneInfo(cfg["timezone"])).strftime("%m-%d %H:%M"))
             lines.append("")
         return "\n".join(lines)
 
@@ -107,8 +99,6 @@ class Scheduler:
                         for lower in exceeded[:-1]:
                             db.execute("INSERT OR IGNORE INTO notifications(id,dedupe,created,due,text,state) VALUES(?,?,?,?,?,'suppressed')", (uid(), f"quota:{n['id']}:{end}:{lower}:0", now, now, "已合并到更高等级告警"))
                         self.store.enqueue(db, key, f"⚠️ {n['name']} 流量已用约 {n['percent']:.1f}%\n预计剩余：{human_bytes(n['remaining'],n['profile']['unit'])}\n请及时检查，余额为本地估算。", now, node=n["id"])
-                if cfg["forecast_enabled"] and n["exhaustion_risk"]:
-                    self.store.enqueue(db, f"forecast:{n['id']}:{local.date()}", f"⚠️ {n['name']} 按近期消耗预计还能使用 {n['forecast_days']:.1f} 天，可能在重置前用完。", now, node=n["id"])
                 if n["meta"].get("error"):
                     self.store.enqueue(db, f"agent-error:{n['id']}:{local.date()}", f"⚠️ {n['name']} 采集异常：{n['meta']['error']}", now, node=n["id"])
             db.execute("UPDATE notifications SET state='expired',error='超过24小时未发送' WHERE state IN ('pending','retry') AND created<?", (now-86400,))
@@ -178,7 +168,9 @@ class Scheduler:
             db.execute("DELETE FROM enrollments WHERE expires<?", (now,))
             db.execute("DELETE FROM notifications WHERE created<? AND state IN ('sent','expired','suppressed')", (now-90*86400,))
             row = db.execute("SELECT value FROM settings WHERE key='last_compact'").fetchone()
-            if not row or now-float(row[0]) >= 3600:
+            # Hourly normally; while a backlog remains (e.g. right after upgrading), keep
+            # archiving in small batches every tick so agent reports are never blocked long.
+            if not row or row[0] == "backlog" or now-float(row[0]) >= 3600:
                 from .retention import compact
-                compact(db, now)
-                db.execute("INSERT OR REPLACE INTO settings VALUES('last_compact',?)", (str(now),))
+                done = compact(db, now) < 5000
+                db.execute("INSERT OR REPLACE INTO settings VALUES('last_compact',?)", (str(now) if done else "backlog",))

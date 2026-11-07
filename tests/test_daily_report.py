@@ -16,10 +16,10 @@ def test_traffic_bytes_scales_small_values():
 
 
 def test_time_left():
-    assert time_left(16*86400 + 22*3600 + 59) == "还剩 16 天 22 小时"
-    assert time_left(3*86400 + 10) == "还剩 3 天"
-    assert time_left(5*3600) == "还剩 5 小时"
-    assert time_left(120) == "不足 1 小时"
+    assert time_left(7*86400 + 19*3600 + 59) == "7天19小时"
+    assert time_left(3*86400 + 10) == "3天"
+    assert time_left(5*3600) == "5小时"
+    assert time_left(120) == "不足1小时"
     assert time_left(-1) == "已到期"
 
 
@@ -34,7 +34,12 @@ def test_report_shows_today_totals_and_countdown_without_yesterday(client, app, 
     assert "今日上传：300.00 MB / 下载：45.00 MB / 合计：345.00 MB" in text
     assert "昨日" not in text
     [reset_line] = [line for line in text.splitlines() if line.startswith("下次重置：")]
-    assert "（还剩 " in reset_line and "Asia/Shanghai" not in reset_line and "UTC" not in reset_line
+    assert reset_line.endswith("小时）") or reset_line.endswith("天）")
+    assert "还剩" not in reset_line and "Asia/Shanghai" not in reset_line and "UTC" not in reset_line
+    # Each server is exactly: name, today's traffic, remaining, next reset.
+    block = text.split("\n\n")[1].splitlines()
+    assert [line.split("：")[0] for line in block[1:]] == ["今日上传", "预计剩余", "下次重置"]
+    assert "余额为本地估算" not in text and "最近采集" not in text and "预计可用" not in text
 
 
 def test_channel_report_totals_only_its_servers(client, app, node):
@@ -48,3 +53,30 @@ def test_channel_report_totals_only_its_servers(client, app, node):
     text = Scheduler(app.state.store).daily_text(now, set(entry["nodes"]))
     assert "今日合计（1 台）：上传 2.00 MB / 下载 1.00 MB / 总计 3.00 MB" in text
     assert "未分配服务器" not in text
+
+
+def test_forecast_alerts_are_not_sent(client, app, node, monkeypatch):
+    """Even a server predicted to run out before reset gets no forecast alert."""
+    import sentinel.notifications as notifications
+    from test_notifications import enabled
+    enabled(client)
+    real = notifications.node_view
+    def at_risk(*args, **kwargs):
+        view = real(*args, **kwargs)
+        view.update(exhaustion_risk=True, forecast_days=1.5)
+        return view
+    monkeypatch.setattr(notifications, "node_view", at_risk)
+    report(client, node, [sample(1, time.time()-60, time.time()-1, 10)])
+    Scheduler(app.state.store).tick(time.time())
+    with app.state.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM notifications WHERE dedupe LIKE 'forecast:%'").fetchone()[0] == 0
+
+
+def test_queued_forecast_alerts_are_dropped_on_upgrade(tmp_path):
+    from sentinel.server import create_app
+    store = create_app(tmp_path, background=False).state.store
+    with store.connect() as db:
+        db.execute("INSERT INTO notifications(id,dedupe,created,due,text,channel) VALUES('f','forecast:n:2026-11-07:0',0,0,'预测','default')")
+    store = create_app(tmp_path, background=False).state.store
+    with store.connect() as db:
+        assert db.execute("SELECT state FROM notifications WHERE id='f'").fetchone()[0] == "suppressed"

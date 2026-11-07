@@ -8,7 +8,7 @@ import SettingsView from './components/SettingsView.vue'
 import TrafficRank from './components/TrafficRank.vue'
 import EventsView from './components/EventsView.vue'
 import { api, APIError, ago, bytes, trafficBytes, directions, errorText, metered, setCSRF, shortDate, statusLabels, timeLeft, type Node } from './api'
-const ready=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),group=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai',channels:0})
+const ready=ref(false),loaded=ref(false),initialized=ref(true),username=ref(''),version=ref(''),fatal=ref(''),error=ref(''),page=ref('overview'),nodes=ref<Node[]>([]),busy=ref(false),lastRefresh=ref(0),zone=ref('Asia/Shanghai'),search=ref(''),filter=ref('all'),group=ref('all'),adding=ref(false),installNode=ref<{id:string;name:string}|undefined>(),detailId=ref(''),telegram=ref({enabled:false,time:'09:00',zone:'Asia/Shanghai',channels:0})
 let timer:ReturnType<typeof setInterval> | undefined
 const pages=[{id:'overview',name:'流量总览',icon:LayoutDashboard,desc:'集中查看各服务器的剩余额度、计费用量、重置周期与运行状态。'},{id:'notifications',name:'通知设置',icon:Bell,desc:'配置 Telegram 连接、每日报告与即时告警规则。'},{id:'events',name:'事件记录',icon:ScrollText,desc:'追溯系统事件与通知发送结果。'},{id:'system',name:'系统设置',icon:Settings,desc:'管理主控访问地址、数据备份与管理员账户。'}]
 const current=computed(()=>pages.find(v=>v.id===page.value) || pages[0])
@@ -52,12 +52,12 @@ async function dragEnd(){ window.removeEventListener('pointermove',dragMove); co
 function dragStart(e:PointerEvent,id:string){ if(e.button!==0) return; drag.id=id; drag.over=''; window.addEventListener('pointermove',dragMove); window.addEventListener('pointerup',dragEnd,{ once:true }); window.addEventListener('pointercancel',dragEnd,{ once:true }) }
 // Keyboard alternative: ↑ / ↓ on the focused handle moves the server among the visible rows.
 async function nudge(id:string,step:number,el:HTMLElement){ const list=filtered.value, i=list.findIndex(n=>n.id===id), target=list[i+step]; if(!target) return; await reorder(id,target.id,step>0); requestAnimationFrame(()=>el.focus()) }
-async function init(){fatal.value='';ready.value=false;try{const status=await api('/status');initialized.value=status.initialized;version.value=status.version;if(status.initialized){try{const me=await api('/me');setCSRF(me.csrf);username.value=me.username;await refresh();await loadTelegram()}catch(e){if(!(e instanceof APIError && e.status===401))throw e}}}catch(e){fatal.value=errorText(e)}finally{ready.value=true}}
-async function refresh(){if(busy.value||!username.value)return;busy.value=true;try{const data=await api<{nodes:Node[];timezone:string}>('/nodes');nodes.value=data.nodes;zone.value=data.timezone;lastRefresh.value=Date.now()/1000;error.value=''}catch(e){error.value=errorText(e)}finally{busy.value=false}}
+async function init(){fatal.value='';ready.value=false;try{const status=await api('/status');initialized.value=status.initialized;version.value=status.version;if(status.initialized){try{const me=await api('/me');setCSRF(me.csrf);username.value=me.username;refresh();loadTelegram()}catch(e){if(!(e instanceof APIError && e.status===401))throw e}}}catch(e){fatal.value=errorText(e)}finally{ready.value=true}}
+async function refresh(){if(busy.value||!username.value)return;busy.value=true;try{const data=await api<{nodes:Node[];timezone:string}>('/nodes');nodes.value=data.nodes;zone.value=data.timezone;lastRefresh.value=Date.now()/1000;error.value=''}catch(e){error.value=errorText(e)}finally{busy.value=false;loaded.value=true}}
 async function loadTelegram(){try{const data=await api('/settings');telegram.value={enabled:data.telegram_enabled,time:data.daily_time,zone:data.timezone,channels:data.channels.filter((c:{enabled:boolean})=>c.enabled).length}}catch{/* Settings page surfaces its own error. */}}
 async function authenticated(name:string){username.value=name;initialized.value=true;await refresh();await loadTelegram()}
 async function logout(){try{await api('/logout','POST');expired()}catch(e){error.value=errorText(e)}}
-function expired(){username.value='';setCSRF('');nodes.value=[];detailId.value='';adding.value=false;installNode.value=undefined}
+function expired(){username.value='';loaded.value=false;setCSRF('');nodes.value=[];detailId.value='';adding.value=false;installNode.value=undefined}
 function add(){installNode.value=undefined;adding.value=true}
 function showInstall(node:{id:string;name:string}){detailId.value='';installNode.value=node;adding.value=true}
 onMounted(()=>{init();window.addEventListener('session-expired',expired);timer=setInterval(()=>{if(page.value==='overview')refresh()},15000)})
@@ -173,7 +173,9 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);window.removeEventListener('s
               </div>
             </div>
 
-            <div v-if="!nodes.length" class="empty node-empty">
+            <div v-if="!loaded" class="loading"><RefreshCw :size="18" class="spinning" /> 正在加载服务器…</div>
+
+            <div v-else-if="!nodes.length" class="empty node-empty">
               <div class="empty-icon"><Server :size="30" :stroke-width="1.5" /></div>
               <h3>接入第一台服务器</h3>
               <p>运行专属安装命令，再填入商家余额和重置日期。<br>之后自动统计流量，并通过 Telegram 提前提醒。</p>

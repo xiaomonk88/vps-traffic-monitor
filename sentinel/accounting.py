@@ -9,9 +9,13 @@ from .core import cycle_at, day_window, metered, portion
 
 
 def usage(db, node_id: str, start: float, end: float, anchor=None) -> dict:
-    rows = db.execute("SELECT * FROM samples WHERE node_id=? AND end>? AND start<? ORDER BY start", (node_id, start, end)).fetchall()
+    """Traffic and coverage of [start, end).
+
+    Samples fully inside the window are summed by SQLite; only the few that cross a window
+    edge are split proportionally in Python. Iterating every 10-second sample of a whole
+    billing cycle in Python made the server list take seconds and grow every day.
+    """
     rx = tx = 0
-    spans = []
     uncertain = False
     archive_covered = 0.0
     for r in db.execute("SELECT * FROM hourly_usage WHERE node_id=? AND hour+3600>? AND hour<?", (node_id, start, end)):
@@ -20,20 +24,23 @@ def usage(db, node_id: str, start: float, end: float, anchor=None) -> dict:
         fraction = max(0, min(end, r["hour"]+3600)-max(start, r["hour"]))/3600
         archive_covered += r["covered"]*fraction
         uncertain = uncertain or bool(r["uncertain"])
-    for r in rows:
-        if anchor and r["epoch"] == anchor["epoch"] and r["seq"] <= anchor["seq"]:
-            continue
+    # Samples up to the calibration checkpoint are already reflected in the calibrated balance.
+    skip, params = "", []
+    if anchor:
+        skip, params = " AND NOT (epoch=? AND seq<=?)", [anchor["epoch"], anchor["seq"]]
+    inside = db.execute("SELECT COALESCE(SUM(rx),0), COALESCE(SUM(tx),0), COALESCE(SUM(CASE WHEN quality='ok' THEN end-start ELSE 0 END),0), "
+                        "COALESCE(MAX(quality!='ok'),0) FROM samples WHERE node_id=? AND end>? AND end<=? AND start>=?"+skip,
+                        [node_id, start, end, start, *params]).fetchone()
+    rx, tx, covered = rx+inside[0], tx+inside[1], float(inside[2])
+    uncertain = uncertain or bool(inside[3])
+    for r in db.execute("SELECT * FROM samples WHERE node_id=? AND end>? AND start<? AND (start<? OR end>?)"+skip,
+                        [node_id, start, end, start, end, *params]):
         rx += portion(r["rx"], r["start"], r["end"], start, end)
         tx += portion(r["tx"], r["start"], r["end"], start, end)
         if r["quality"] == "ok":
-            spans.append((max(start, r["start"]), min(end, r["end"])))
+            covered += max(0, min(end, r["end"])-max(start, r["start"]))
         else:
             uncertain = True
-    covered = 0.0
-    last = start
-    for a, b in spans:
-        covered += max(0, b - max(a, last))
-        last = max(last, b)
     return {"rx": rx, "tx": tx, "coverage": min(1, (covered+archive_covered) / max(1, end-start)), "uncertain": uncertain}
 
 
